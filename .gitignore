@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
+*.egg-info/
+.pytest_cache/
 captures/
 # calib/*.json and calib/ignore_mask.png are the working calibration and are tracked

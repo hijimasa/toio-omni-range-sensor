@@ -1,0 +1,92 @@
+# Container for the ROS 2 side of this project (ros2/toio_omni_range).
+#
+# ROS distro is selectable: humble (Ubuntu 22.04 jammy) and jazzy (24.04 noble).
+# Defaults to jazzy because toio_ros2, which this is meant to run alongside, is
+# on its jazzy branch. ROS_DISTRO_ARG / UBUNTU_CODENAME are only needed to pick
+# the base image; after FROM everything uses ${ROS_DISTRO}, which the base image
+# already sets, so the two can never drift apart.
+ARG ROS_DISTRO_ARG=jazzy
+ARG UBUNTU_CODENAME=noble
+FROM ros:${ROS_DISTRO_ARG}-ros-base-${UBUNTU_CODENAME}
+
+# Arguments
+ARG USER=initial
+ARG GROUP=initial
+ARG UID=1000
+ARG GID=${UID}
+ARG SHELL=/bin/bash
+
+# Replace apt urls.
+# 24.04 (noble) moved the sources out of /etc/apt/sources.list into
+# /etc/apt/sources.list.d/ubuntu.sources (deb822 format), so patch whichever
+# is present rather than assuming either.
+RUN for f in /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do \
+      if [ -f "$f" ]; then \
+        sed -i 's@archive.ubuntu.com@ftp.jaist.ac.jp/pub/Linux@g' "$f"; \
+      fi; \
+    done
+
+# Install packages.
+# bluez is not needed to talk to the adapter -- BlueZ runs on the host and is
+# reached over the mounted D-Bus socket -- but bluetoothctl is what you use to
+# find out why a connection failed, so it earns its place.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    wget curl ssh unzip \
+    git vim tig bluez \
+    dbus-x11 libglvnd0 libgl1 libglx0 libegl1 libxext6 libx11-6 \
+    ros-${ROS_DISTRO}-desktop \
+    ros-${ROS_DISTRO}-tf-transformations \
+    ros-${ROS_DISTRO}-diagnostic-updater ros-${ROS_DISTRO}-diagnostic-aggregator \
+    ros-${ROS_DISTRO}-xacro ros-${ROS_DISTRO}-joint-state-publisher \
+    ros-${ROS_DISTRO}-teleop-twist-keyboard \
+    python3-opencv python3-numpy \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# bleak is the BLE client for the range sensor, toio-py the one for the cube
+# (toio_ros2 needs it and rosdep cannot resolve it).
+# 24.04 ships a PEP 668 "externally managed" Python, where a plain pip3 install
+# refuses to touch the system site-packages. 22.04's pip is too old to know the
+# --break-system-packages flag, so try the plain form first and fall back.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3-pip \
+  && (pip3 install -U bleak toio-py \
+      || pip3 install -U --break-system-packages bleak toio-py) \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/*
+
+# Env vars for the nvidia-container-runtime.
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=graphics,utility,compute
+
+# Setup users and groups.
+# The UID must match the host user: the D-Bus system bus authenticates by UID,
+# and BlueZ's policy is what decides whether this container may talk to the
+# adapter at all. A mismatched UID fails with a bare AccessDenied.
+# 24.04 ships a pre-created uid/gid 1000 (ubuntu), which collides with the host
+# user on most desktops; drop it before creating ours.
+RUN if getent passwd ${UID} >/dev/null && [ "$(getent passwd ${UID} | cut -d: -f1)" != "${USER}" ]; then \
+      userdel -r "$(getent passwd ${UID} | cut -d: -f1)" 2>/dev/null || true; \
+    fi \
+  && if getent group ${GID} >/dev/null && [ "$(getent group ${GID} | cut -d: -f1)" != "${GROUP}" ]; then \
+      groupdel "$(getent group ${GID} | cut -d: -f1)" 2>/dev/null || true; \
+    fi \
+  && groupadd --gid ${GID} ${GROUP} \
+  && useradd --gid ${GID} --uid ${UID} -ms ${SHELL} ${USER} \
+  && usermod -aG bluetooth ${USER} \
+  && mkdir -p /etc/sudoers.d \
+  && echo "${USER} ALL=(ALL) NOPASSWD: ALL" > "/etc/sudoers.d/${USER}" \
+  && chmod 0440 "/etc/sudoers.d/${USER}"
+
+# Switch user to ${USER}
+USER ${USER}
+
+# Make SSH available
+EXPOSE 22
+
+WORKDIR /home/${USER}/colcon_ws
+
+RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc \
+  && echo "[ -f ~/colcon_ws/install/setup.bash ] && source ~/colcon_ws/install/setup.bash" >> ~/.bashrc
+
+ENTRYPOINT ["/bin/bash"]

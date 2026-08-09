@@ -1,90 +1,80 @@
 #!/usr/bin/env python3
 """Receive the 72 measured distances over BLE.
 
-This is the production path: the unit does the measurement and sends 148 bytes
+This is the production path: the unit does the measurement and sends 156 bytes
 per scan instead of a ~26 kB JPEG, so WiFi can be switched off entirely.
 
   ./ble_client.py                 # find the unit, subscribe, print scans
   ./ble_client.py --seconds 20 --csv out.csv
+
+The packet layout is not defined here -- it lives in omni_protocol, shared with
+the ROS 2 driver, so the two cannot drift apart.
 """
 
 import argparse
 import asyncio
-import struct
+import os
 import sys
 import time
 
 from bleak import BleakClient, BleakScanner
 
-SERVICE_UUID = "6f6d6e69-0001-4a52-b000-000000000001"
-SCAN_UUID = "6f6d6e69-0002-4a52-b000-000000000001"
-N_RAYS = 72
-NO_ECHO = 0xFFFF
-HEADER = "<HBBHHI"        # magic, version, n_rays, seq, vbat_mv, uptime_s
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "..", "ros2", "toio_omni_range"))
+from toio_omni_range import omni_protocol as proto     # noqa: E402
 
 
-def parse(data):
-    if len(data) < struct.calcsize(HEADER) + 2 * N_RAYS:
-        return None
-    magic, ver, n, seq, vbat_mv, uptime = struct.unpack_from(HEADER, data, 0)
-    if magic != 0x4F52 or n != N_RAYS:
-        return None
-    raw = struct.unpack_from("<%dH" % N_RAYS, data, struct.calcsize(HEADER))
-    # bearing of ray i is i*5 deg in the ROS frame, wrapped to (-180, 180]
-    out = []
-    for i, mm in enumerate(raw):
-        b = (i * 360.0 / N_RAYS + 180.0) % 360.0 - 180.0
-        out.append((b, None if mm == NO_ECHO else mm / 10.0))
-    return seq, ver, vbat_mv, uptime, out
+async def find_unit(timeout):
+    dev = await BleakScanner.find_device_by_filter(
+        lambda d, ad: proto.is_unit(d.name or ad.local_name, ad.service_uuids),
+        timeout=timeout)
+    if dev is None:
+        raise SystemExit("no OmniRange unit found. Is it powered and advertising?")
+    print("found %s (%s)" % (dev.name, dev.address))
+    return dev
 
 
 async def run(args):
     print("scanning for the unit ...")
-    dev = await BleakScanner.find_device_by_filter(
-        lambda d, ad: SERVICE_UUID.lower() in [u.lower() for u in (ad.service_uuids or [])]
-        or (d.name or "").startswith("OmniRange"),
-        timeout=args.timeout)
-    if dev is None:
-        raise SystemExit("no OmniRange unit found. Is it powered and advertising?")
-    print("found %s (%s)" % (dev.name, dev.address))
+    dev = await find_unit(args.timeout)
 
     csv = open(args.csv, "w") if args.csv else None
     if csv:
-        csv.write("t,seq," + ",".join("d%+d" % int(i * 5 if i * 5 <= 180 else i * 5 - 360)
-                                      for i in range(N_RAYS)) + "\n")
+        csv.write("t,seq," + ",".join("d%+d" % round(b) for b in proto.BEARINGS_DEG) + "\n")
 
     t0 = time.time()
     quiet = bool(args.battery)
     stats = {"n": 0, "last_seq": None, "dropped": 0, "vbat": 0, "uptime": 0}
 
     def on_notify(_, data):
-        p = parse(data)
-        if p is None:
+        scan = proto.parse(data)
+        if scan is None:
             print("unparsable packet of %d bytes" % len(data))
             return
-        seq, ver, vbat_mv, uptime, rays = p
+        if scan.version != proto.VERSION:
+            print("warning: unit speaks protocol v%d, this client v%d"
+                  % (scan.version, proto.VERSION))
         stats["n"] += 1
-        if stats["last_seq"] is not None:
-            gap = (seq - stats["last_seq"]) & 0xFFFF
-            if gap > 1:
-                stats["dropped"] += gap - 1
-        stats["last_seq"] = seq
-        hits = [(b, d) for b, d in rays if d is not None]
+        stats["dropped"] += max(0, proto.missed_scans(stats["last_seq"], scan.seq))
+        stats["last_seq"] = scan.seq
+        hits = [(b, d) for b, d in zip(proto.BEARINGS_DEG, scan.distance_cm)
+                if d is not None]
         el = time.time() - t0
-        stats["vbat"] = vbat_mv
-        stats["uptime"] = uptime
+        stats["vbat"] = scan.vbat_mv
+        stats["uptime"] = scan.uptime_s
         if quiet:
             return
         print("[%6.2fs] seq %5d  %2d/%d hits  %s"
-              % (el, seq, len(hits), N_RAYS,
+              % (el, scan.seq, len(hits), proto.N_RAYS,
                  "  ".join("%+.0f:%.1fcm" % (b, d) for b, d in hits[:6]) or "-"))
         if csv:
-            csv.write("%.3f,%d," % (el, seq) +
-                      ",".join("" if d is None else "%.1f" % d for _, d in rays) + "\n")
+            csv.write("%.3f,%d," % (el, scan.seq) +
+                      ",".join("" if d is None else "%.1f" % d
+                               for d in scan.distance_cm) + "\n")
 
     async with BleakClient(dev, timeout=args.timeout) as client:
-        print("connected; %d bytes per scan" % (struct.calcsize(HEADER) + 2 * N_RAYS))
-        await client.start_notify(SCAN_UUID, on_notify)
+        print("connected; %d bytes per scan" % proto.PACKET_SIZE)
+        await client.start_notify(proto.SCAN_UUID, on_notify)
         if args.battery:
             blog = open(args.battery, "w")
             blog.write("t_s,uptime_s,vbat_mv,scans\n")
@@ -108,7 +98,7 @@ async def run(args):
             blog.close()
         else:
             await asyncio.sleep(args.seconds)
-        await client.stop_notify(SCAN_UUID)
+        await client.stop_notify(proto.SCAN_UUID)
 
     if csv:
         csv.close()
@@ -116,29 +106,22 @@ async def run(args):
     print("\n%d scans in %.1fs = %.1f Hz, %d dropped (sequence gaps)"
           % (stats["n"], el, stats["n"] / el if el else 0, stats["dropped"]))
     print("payload rate: %.0f B/s  (streaming the same result as JPEG was ~200 kB/s)"
-          % (stats["n"] * (struct.calcsize(HEADER) + 2 * N_RAYS) / el if el else 0))
+          % (stats["n"] * proto.PACKET_SIZE / el if el else 0))
 
 
 async def send_cmd(args):
     """One-shot command; the unit may vanish mid-write, which is the point."""
     print("scanning for the unit ...")
-    dev = await BleakScanner.find_device_by_filter(
-        lambda d, ad: SERVICE_UUID.lower() in [u.lower() for u in (ad.service_uuids or [])]
-        or (d.name or "").startswith("OmniRange"), timeout=args.timeout)
-    if dev is None:
-        raise SystemExit("no OmniRange unit found")
-    print("found %s (%s)" % (dev.name, dev.address))
-    if args.cmd == "reboot":
-        payload = bytes([0x01])
-    elif args.cmd == "off":
-        payload = bytes([0x02])
-    elif args.cmd == "wifi-on":
-        payload = bytes([0x04])
-    else:
-        payload = bytes([0x03]) + struct.pack("<H", int(args.scan_period))
+    dev = await find_unit(args.timeout)
+    payload = {
+        "reboot": proto.cmd_reboot,
+        "off": proto.cmd_power_off,
+        "wifi-on": proto.cmd_wifi_on,
+        "scan-period": lambda: proto.cmd_scan_period(args.scan_period),
+    }[args.cmd]()
     async with BleakClient(dev, timeout=args.timeout) as client:
         try:
-            await client.write_gatt_char(SCAN_UUID, payload, response=False)
+            await client.write_gatt_char(proto.SCAN_UUID, payload, response=False)
         except Exception as exc:
             # a unit that switched itself off cannot acknowledge the write
             print("write returned: %s" % exc)

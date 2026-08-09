@@ -1,0 +1,1 @@
+# Not a ROS 2 workspace: keep colcon out of the PlatformIO build tree.

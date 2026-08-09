@@ -3,7 +3,7 @@
 toio 用の全周距離センサ。M5Stack **Timer Camera F** と凸面鏡を組み合わせたカタディオプトリック系で
 全周を 1 枚の画像に写し、地面と物体の**彩度差**から 5 度刻み・72 方向の距離を出すことを目指す。
 
-現在のステータス: **ステップ 1 — 映像取得と全周視野の確認**
+現在のステータス: **ステップ 6 — ROS 2 への出力（実機未確認）**
 
 | ステップ | 内容 | 状態 |
 |---|---|---|
@@ -11,7 +11,8 @@ toio 用の全周距離センサ。M5Stack **Timer Camera F** と凸面鏡を組
 | 2 | 環状画像 → パノラマ展開のキャリブレーション（中心・内外半径） | 治具は用意済み（`omni_viewer.py`） |
 | 3 | 彩度ベースの地面／物体境界検出 → 72 方向の半径 | 実装済み（`omni_range.py`） |
 | 4 | 半径 → 距離への変換（鏡形状の校正） | 暫定フィット済み（`fit_range.py`）|
-| 5 | toio への出力 | 未着手 |
+| 5 | オンデバイス処理と BLE 出力 | 実装済み（`ble_client.py` で受信確認）|
+| 6 | ROS 2 への出力（LaserScan） | ドライバ実装済み・**実機未確認** |
 
 ---
 
@@ -25,8 +26,13 @@ tools/mask_editor.py        無視領域マスクの作成（自動生成＋手�
 tools/omni_range.py         ステップ 3 本体。72 方向の地面／物体境界を検出
 tools/fit_range.py           ステップ 4。半径 → 距離のフィット
 tools/make_synthetic_omni.py  ハード無しでツールを試すための合成画像生成
+tools/ble_client.py         BLE でスキャンを受信する CLI
+tools/gen_firmware_calib.py 較正 → デバイス用 C ヘッダ・ROS パラメータの生成
 calib/mirror_calib.json     鏡のキャリブレーション
 calib/ignore_mask.png       無視領域マスク（パノラマ座標、白=使う / 黒=無視）
+ros2/toio_omni_range/       ROS 2 ドライバ。BLE → sensor_msgs/LaserScan
+  toio_omni_range/omni_protocol.py  パケット定義（ble_client.py と共有）
+docker/                     ROS 2 用コンテナ（このリポジトリに ROS は要らない）
 ```
 
 ## ハードウェア
@@ -530,6 +536,59 @@ curl "http://<ip>/ctrl?var=scan_period&val=200"   # 0 = 上限なし
 比べて「32% は同じフレームの再処理」と推測したが、タイムスタンプで判定を
 入れても レートは 11.0 Hz のまま——重複はほぼ無かった。推測を実測と
 取り違えた例。判定自体は害がないので残してある。
+
+## ステップ 6: ROS 2 への出力（実機未確認）
+
+`ros2/toio_omni_range` が BLE のスキャンを `sensor_msgs/LaserScan` として流す。
+**LaserScan にすることが要点**で、そうすれば RViz・コストマップ・スキャン
+マッチングが、このセンサについて何も知らないまま動く。
+
+```bash
+docker/build-docker-image.bash            # 初回のみ
+docker/run-docker-container.bash
+# コンテナ内
+colcon build --symlink-install && source install/setup.bash
+ros2 launch toio_omni_range omni_range.launch.py
+ros2 launch toio_omni_range omni_range.launch.py device_address:=AA:BB:CC:DD:EE:FF
+```
+
+| topic | 型 | 内容 |
+|---|---|---|
+| `scan` | `sensor_msgs/LaserScan` | 72 方向、5 度刻み |
+| `omni/battery` | `sensor_msgs/BatteryState` | vbat（残量は未フィットなので NaN）|
+| `/diagnostics` | `DiagnosticArray` | レート・欠落・再接続・レンジ外の数 |
+
+回転式 LiDAR と違う点が 2 つある。
+
+- **スキャンは 1 枚のカメラフレームのスナップショット**。72 本が同時刻なので
+  走査中の歪みが無く、`time_increment` は 0。
+- **地平は約 11 cm**。`range_min` / `range_max` はファームと同じ較正から
+  `gen_firmware_calib.py` が `params/omni_range_calib.yaml` に生成する
+  （0.041〜0.111 m）。**手で書かないこと** — 鏡と食い違った LaserScan は、
+  下流が黙って全点を捨てる。
+
+### 配列の並べ替えが要る
+
+`bearing(i) = ((i*5 + 180) mod 360) - 180` なので、ワイヤ上の順序は方位に対して
+単調でない（ray 36 が −180 度）。LaserScan は方位昇順を要求するため、
+ドライバは `omni_protocol.BEARING_ORDER` で並べ替える。
+
+**ここを間違えると 180 度回ったスキャンが「それらしく」表示される。** 定数の
+ローテート量を書かず、方位から並べ替えを導いているのはそのため。
+`test_omni_protocol.py` が並べ替えと角度の対応を検証している。
+
+### BLE アダプタの取り合い
+
+toio キューブ（toio-py → bleak）とセンサ（bleak）が同じ HCI を使う。接続の
+発見スキャンが同居する接続を不安定にするので、**一度見つけたアドレスを
+`device_address` に固定してスキャンを避ける**こと。ノードは起動時に見つけた
+アドレスをログに出す。それでも足りなければ `ble_adapter:=hci1` でドングルを分ける。
+
+### 未確認のこと
+
+ドライバはまだ実機の BLE 相手に動かしていない。プロトコルの往復と方位の
+並べ替えは単体テストで確認済みだが、**接続・再接続・スキャン欠落の挙動は
+実測していない**。
 
 ## USB ケーブルと死角、デバッグ手段
 
