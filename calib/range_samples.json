@@ -1,0 +1,57 @@
+{
+  "note": "radius_px is in calibration (VGA 640-wide) pixels",
+  "samples": [
+    {
+      "distance_cm": 5.0,
+      "bearing_deg": 0.0,
+      "radius_px": 103.23,
+      "frame_width": 320
+    },
+    {
+      "distance_cm": 6.0,
+      "bearing_deg": 0.0,
+      "radius_px": 135.58,
+      "frame_width": 320
+    },
+    {
+      "distance_cm": 7.0,
+      "bearing_deg": 0.0,
+      "radius_px": 161.81,
+      "frame_width": 320
+    },
+    {
+      "distance_cm": 8.0,
+      "bearing_deg": 0.0,
+      "radius_px": 188.04,
+      "frame_width": 320
+    },
+    {
+      "distance_cm": 9.0,
+      "bearing_deg": 0.0,
+      "radius_px": 208.15,
+      "frame_width": 320
+    },
+    {
+      "distance_cm": 10.0,
+      "bearing_deg": 0.0,
+      "radius_px": 226.51,
+      "frame_width": 320
+    }
+  ],
+  "rejected": [
+    {
+      "distance_cm": 4.0,
+      "bearing_deg": 0.0,
+      "radius_px": 106.72,
+      "frame_width": 320,
+      "rejected": "non-monotonic (106.7 > the 5 cm reading 103.2) and its scan is near-identical to the 5 cm one: taken before the bar was moved"
+    },
+    {
+      "distance_cm": 11.0,
+      "bearing_deg": 0.0,
+      "radius_px": 225.64,
+      "frame_width": 320,
+      "rejected": "radius 225.6 < the 10 cm reading 226.5 (slope -0.9 px/cm): the target did not move, or it is past the usable rim"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "cx": 320.0,
+  "cy": 240.0,
+  "r_in": 48.0,
+  "r_out": 220.0,
+  "theta0": 0.0,
+  "ccw": false,
+  "flip_radial": false,
+  "n_rays": 72
+}

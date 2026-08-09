@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+captures/
+# calib/*.json and calib/ignore_mask.png are the working calibration and are tracked

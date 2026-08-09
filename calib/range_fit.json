@@ -1,0 +1,18 @@
+{
+  "model": "r = a + b*arctan(d/c); d = c*tan((r-a)/b)",
+  "a": -116.70963646162346,
+  "b": 363.1015130223335,
+  "c": 7.21735779269169,
+  "units": {
+    "distance": "cm",
+    "radius": "calibration px"
+  },
+  "n_samples": 6,
+  "rms_px": 0.62,
+  "measured_min_cm": 5.0,
+  "measured_max_cm": 10.0,
+  "d_min": 4.5,
+  "d_max": 11.0,
+  "calib_r_in": 70.0,
+  "calib_r_out": 244.0
+}

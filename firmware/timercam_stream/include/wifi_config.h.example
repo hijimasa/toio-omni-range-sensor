@@ -1,0 +1,29 @@
+// Copy to wifi_config.h and fill in. wifi_config.h is gitignored.
+#pragma once
+
+// Leave WIFI_SSID empty ("") to skip station mode and start the soft AP
+// immediately. Station mode also falls back to the soft AP if the join fails.
+#define WIFI_SSID ""
+#define WIFI_PASS ""
+
+// Soft AP fallback. The unit is reachable at http://192.168.4.1/ .
+#define AP_SSID "TimerCamF"
+#define AP_PASS "omnivision"   // >= 8 chars, or "" for an open AP
+// 2.4 GHz channel for the soft AP. Survey the band before changing it -- in a
+// crowded room the quietest channel is rarely the default.
+#define AP_CHANNEL 1
+
+// Boot straight into the low-power configuration: BLE only, no WiFi. WiFi is
+// what costs the power, and once the measurement runs on the unit nothing
+// needs it. Turn it on when you need the calibration tools:
+//   tools/ble_client.py --cmd wifi-on
+// Set to 1 if you would rather have HTTP available from boot.
+#define START_WIFI_AT_BOOT 0
+
+// Optional static IP for station mode (all four must be set, or leave
+// USE_STATIC_IP undefined for DHCP).
+// #define USE_STATIC_IP
+#define STATIC_IP      192, 168, 0, 60
+#define STATIC_GATEWAY 192, 168, 0, 1
+#define STATIC_SUBNET  255, 255, 255, 0
+#define STATIC_DNS     192, 168, 0, 1

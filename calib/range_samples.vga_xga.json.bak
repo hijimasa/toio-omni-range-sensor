@@ -1,0 +1,63 @@
+{
+  "note": "radius_px is in calibration (VGA 640-wide) pixels",
+  "samples": [
+    {
+      "distance_cm": 7.0,
+      "bearing_deg": 0.0,
+      "radius_px": 118.34,
+      "frame_width": 1024
+    },
+    {
+      "distance_cm": 7.0,
+      "bearing_deg": 0.0,
+      "radius_px": 119.65,
+      "frame_width": 1024
+    },
+    {
+      "distance_cm": 7.0,
+      "bearing_deg": 0.0,
+      "radius_px": 118.99,
+      "frame_width": 1024
+    },
+    {
+      "distance_cm": 8.031,
+      "bearing_deg": 5.0,
+      "radius_px": 138.56,
+      "frame_width": 1024
+    },
+    {
+      "distance_cm": 9.0,
+      "bearing_deg": 0.0,
+      "radius_px": 152.96,
+      "frame_width": 1024
+    },
+    {
+      "distance_cm": 10.038,
+      "bearing_deg": 5.0,
+      "radius_px": 168.0,
+      "frame_width": 1024
+    },
+    {
+      "distance_cm": 11.042,
+      "bearing_deg": 5.0,
+      "radius_px": 181.69,
+      "frame_width": 1024
+    }
+  ],
+  "rejected": [
+    {
+      "distance_cm": 5.5,
+      "bearing_deg": 0.0,
+      "radius_px": 73.92,
+      "frame_width": 1024,
+      "rejected": "mask boundary (73.9) -- target was inside the measurable region"
+    },
+    {
+      "distance_cm": 7.0,
+      "bearing_deg": 0.0,
+      "radius_px": 110.5,
+      "frame_width": 1024,
+      "rejected": "7 cm re-measured in a later session read 110.5 px vs 118.3/119.7/119.0 before; mirror geometry verified unchanged, so the distance reference shifted ~0.4 cm between sessions"
+    }
+  ]
+}
