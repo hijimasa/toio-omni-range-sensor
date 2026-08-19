@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <NimBLEDevice.h>
 #include <esp_camera.h>
+#include <esp_timer.h>
 #include <math.h>
 
 #include "scan.h"
@@ -130,6 +131,21 @@ static void scan_task(void*) {
         }
         last_ts = fb->timestamp;
 
+        // How old is the frame about to be measured? esp_camera stamps every
+        // buffer at capture time, and with fb_count 2 the driver hands back the
+        // oldest queued one -- so the answer is not zero, and every millisecond
+        // of it is latency the operator sees in RViz. Measured rather than
+        // assumed: the same "it must be fresh" assumption was wrong for /still
+        // and quietly paired each calibration distance with the previous
+        // target position.
+        // esp32-camera stamps fb->timestamp from esp_timer_get_time(), so the
+        // comparison has to use the same clock. Comparing against gettimeofday()
+        // instead reads the drift between the RTC and the APB timer as if it
+        // were latency -- it showed 730 ms, and "improved" to 555 ms purely
+        // because a reflash had reset the uptime the drift accumulates over.
+        int64_t fb_us = (int64_t)fb->timestamp.tv_sec * 1000000 + fb->timestamp.tv_usec;
+        int32_t age_ms = (int32_t)((esp_timer_get_time() - fb_us) / 1000);
+
         bool ok = scan_frame(fb, &res);
         esp_camera_fb_return(fb);
         if (!ok) {
@@ -148,6 +164,24 @@ static void scan_task(void*) {
         g_chr->setValue((uint8_t*)&pkt, sizeof(pkt));
         g_chr->notify();
         ++g_published;
+        // Latency budget, once every 2 s: how stale the frame was when it
+        // arrived, and how long the whole publish cycle takes.
+        {
+            static uint32_t t_last_pub = 0, t_log = 0;
+            static uint32_t age_sum = 0, cyc_sum = 0, n = 0;
+            uint32_t now = millis();
+            if (t_last_pub) { cyc_sum += now - t_last_pub; }
+            t_last_pub = now;
+            age_sum += (uint32_t)(age_ms < 0 ? 0 : age_ms);
+            ++n;
+            if (now - t_log > 2000 && n) {
+                logf("latency: frame age %u ms, publish cycle %u ms, "
+                     "scan %u ms (%u scans)\n",
+                     (unsigned)(age_sum / n), (unsigned)(cyc_sum / (n > 1 ? n - 1 : 1)),
+                     (unsigned)((res.us_sample + res.us_detect) / 1000), (unsigned)n);
+                t_log = now; age_sum = cyc_sum = n = 0;
+            }
+        }
 
         // Short yield only: the duplicate check above is what paces the loop
         // to the sensor's actual frame rate now.

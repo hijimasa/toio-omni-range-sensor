@@ -86,6 +86,10 @@ static const char* STREAM_PART         = "Content-Type: image/jpeg\r\nContent-Le
 
 // ---------------------------------------------------------------- camera ---
 
+// Frame buffers per camera config. Kept as a name because camera_fb_get_fresh()
+// has to drain exactly this many to be sure nothing in flight survives.
+#define CAMERA_FB_COUNT 2
+
 static bool camera_start(pixformat_t fmt = PIXFORMAT_JPEG,
                          framesize_t size = FRAMESIZE_UXGA,
                          int fb_count = -1) {
@@ -118,7 +122,8 @@ static bool camera_start(pixformat_t fmt = PIXFORMAT_JPEG,
     cfg.jpeg_quality = 12;
     // RGB565 buffers are ~30x larger than a JPEG one (XGA = 1.5 MB each), so a
     // second one does not fit alongside anything else in 4 MB of PSRAM.
-    cfg.fb_count     = fb_count > 0 ? fb_count : (psramFound() ? 2 : 1);
+    cfg.fb_count     = fb_count > 0 ? fb_count
+                                    : (psramFound() ? CAMERA_FB_COUNT : 1);
     cfg.fb_location  = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
     // GRAB_LATEST keeps the driver capturing even with no client attached,
     // which floods the log with "cam_hal: FB-OVF". WHEN_EMPTY only captures
@@ -159,6 +164,32 @@ static bool camera_start(pixformat_t fmt = PIXFORMAT_JPEG,
         s->set_wb_mode(s, 1);
     }
     return true;
+}
+
+// A frame captured after this call, not before it.
+//
+// grab_mode is CAMERA_GRAB_WHEN_EMPTY (GRAB_LATEST floods the log with
+// cam_hal FB-OVF when nobody is attached), and the driver refills a buffer the
+// moment it is returned. So after a single-shot request hands its buffer back,
+// the driver immediately captures into it -- and the next single-shot request
+// gets THAT frame, taken at the time of the previous request. A stream never
+// notices because frames keep flowing; /still and /scan do, and the picture
+// they return is of whatever the world looked like one request ago. That is
+// exactly the kind of wrong-but-plausible answer this sensor cannot afford:
+// during a range calibration it silently pairs a known distance with the
+// radius of the *previous* target position.
+//
+// Draining fb_count buffers discards everything already in flight, so the one
+// taken afterwards can only have been captured after the drain started. It
+// costs fb_count frame times (~180 ms at CIF), which is nothing for a
+// single-shot endpoint.
+static camera_fb_t* camera_fb_get_fresh() {
+    for (int i = 0; i < CAMERA_FB_COUNT; ++i) {
+        camera_fb_t* stale = esp_camera_fb_get();
+        if (!stale) break;
+        esp_camera_fb_return(stale);
+    }
+    return esp_camera_fb_get();
 }
 
 // How fast can the unit produce raw pixels? The eventual on-device version does
@@ -255,18 +286,52 @@ static esp_err_t bench_handler(httpd_req_t* req) {
     return httpd_resp_send(req, json, m);
 }
 
+// esp_camera_init() wants internal DRAM that WiFi has already taken: with the
+// station up the free internal heap is ~15 kB and the init fails at every size
+// and format (measured: JPEG VGA with fb_count 1 fails just as UXGA does).
+// Since the switch deinits first, attempting one in that state does not just
+// fail -- it takes down the mode that was working, and the unit has no camera
+// at all until it reboots. Refuse the switch instead. Boot has ~90 kB here.
+static const uint32_t CAM_SWITCH_MIN_HEAP = 30000;
+
+// One buffer in measure mode, not two. With two, the driver fills both and
+// stops; the scan task then sleeps out its period and is handed the older of
+// the pair. Measured on the unit: the frame being measured was 730 ms old, so
+// every scan described where the obstacle had been three quarters of a second
+// earlier. With one buffer there is nothing to queue -- esp_camera_fb_get()
+// can only return the capture that just finished. Capture no longer overlaps
+// the 48 ms of scanning, which costs throughput the scan period was throwing
+// away anyway.
+#define MEASURE_FB_COUNT 1
+
+static bool camera_start_for(int mode) {
+    return (mode == MODE_MEASURE)
+               ? camera_start(PIXFORMAT_RGB565, (framesize_t)SCAN_FRAMESIZE,
+                              MEASURE_FB_COUNT)
+               : camera_start();
+}
+
 bool camera_set_mode(int mode) {
     if (mode == g_mode && esp_camera_sensor_get()) return true;
+    uint32_t heap = ESP.getFreeHeap();
+    if (heap < CAM_SWITCH_MIN_HEAP) {
+        logf("camera mode %d refused: only %u B of heap (need %u). "
+             "WiFi and the camera cannot both be brought up at runtime.\n",
+             mode, (unsigned)heap, (unsigned)CAM_SWITCH_MIN_HEAP);
+        return false;
+    }
+    int was = g_mode;
     esp_camera_deinit();
     delay(30);
-    bool ok = (mode == MODE_MEASURE)
-                  ? camera_start(PIXFORMAT_RGB565, (framesize_t)FRAMESIZE_320X320, 2)
-                  : camera_start();
-    if (!ok) {                     // fall back so the unit stays usable
+    if (!camera_start_for(mode)) {
+        // Put back what was running rather than the heavier JPEG config: the
+        // point of the fallback is to leave the unit usable, and the mode we
+        // came from is the one already known to fit.
         esp_camera_deinit(); delay(30);
-        ok = camera_start();
-        g_mode = MODE_IMAGE;
-        logf("camera mode %d failed, fell back to image mode\n", mode);
+        bool back = camera_start_for(was);
+        g_mode = was;
+        logf("camera mode %d failed, %s\n", mode,
+             back ? "restored the previous mode" : "and the previous mode is gone too");
         return false;
     }
     g_mode = mode;
@@ -311,7 +376,7 @@ static esp_err_t index_handler(httpd_req_t* req) {
 
 static esp_err_t still_handler(httpd_req_t* req) {
     camera_set_mode(MODE_IMAGE);        // JPEG endpoints pull the camera back
-    camera_fb_t* fb = esp_camera_fb_get();
+    camera_fb_t* fb = camera_fb_get_fresh();
     if (!fb) {
         httpd_resp_send_500(req);
         return ESP_FAIL;
@@ -486,7 +551,7 @@ static esp_err_t scan_handler(httpd_req_t* req) {
     }
 
     int64_t t0 = esp_timer_get_time();
-    camera_fb_t* fb = esp_camera_fb_get();
+    camera_fb_t* fb = camera_fb_get_fresh();
     int64_t t1 = esp_timer_get_time();
     bool ok = fb && scan_frame(fb, &res);
     if (fb) esp_camera_fb_return(fb);
@@ -714,7 +779,17 @@ void setup() {
     analogRead(BAT_ADC_PIN);
     analogSetPinAttenuation(BAT_ADC_PIN, ADC_11db);
 
-    if (!camera_start(PIXFORMAT_RGB565, (framesize_t)FRAMESIZE_320X320, 2)) {
+    // Whichever configuration this build needs has to be started here, before
+    // any radio, and never switched afterwards -- see camera_set_mode(). With
+    // WiFi at boot this is the calibration build, so come up in the JPEG
+    // configuration /still and /stream need; otherwise it is the measurement
+    // build and the camera stays in RGB565 for scan_frame().
+#if START_WIFI_AT_BOOT
+    g_mode = MODE_IMAGE;
+#else
+    g_mode = MODE_MEASURE;
+#endif
+    if (!camera_start_for(g_mode)) {
         Serial.println("halted");
         while (true) {
             digitalWrite(CAMERA_LED_GPIO, !digitalRead(CAMERA_LED_GPIO));
@@ -729,11 +804,18 @@ void setup() {
 #if START_WIFI_AT_BOOT
     wifi_start();
     server_start();
+    // and no BLE. The camera, the WiFi station and NimBLE do not fit in
+    // internal RAM together -- any two do, all three do not. With the JPEG
+    // camera and the station up, npl_freertos_callout_init() aborts with
+    // ESP_ERR_NO_MEM and the unit bootloops. This build exists to serve
+    // /still and /stream while the mirror is being calibrated; nothing in
+    // that job needs BLE.
+    logf("calibration build: WiFi + JPEG camera from boot, BLE off\n");
 #else
     g_wifi_disabled = true;
     logf("wifi off at boot (BLE only); send the wifi-on command to enable it\n");
-#endif
     ble_start();
+#endif
     logf("battery %.2f V\n", battery_volts());
     // Leave the LED off. The mirror reflects it straight back into the annulus,
     // where it reads as a strongly saturated blue object: with it lit the scan

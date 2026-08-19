@@ -105,14 +105,28 @@ bool scan_frame(const camera_fb_t* fb, ScanResult* out) {
     // Floor reference from the inner slice only: the outer rows look past the
     // edge of the floor at walls and furniture, and letting those in inflates
     // the spread until real objects stop standing out.
-    const int ref_end = (int)(SCAN_RADIAL_N * SCAN_REF_FRAC);
+    //
+    // "Inner" is counted per ray over that ray's *usable* samples, not over the
+    // raw radial index. The dead zone the mirror makes of the unit itself is
+    // not one radius: measured on the hemispherical mirror it runs from 39 % to
+    // 81 % of r_out depending on bearing. Slicing the raw index would hand the
+    // reference nothing at all in the worst directions and the whole near half
+    // in the best ones, so the floor model would be built from a biased handful
+    // of bearings. Per-ray, every direction contributes its own near field.
     static uint32_t hs[256], hv[256];
     memset(hs, 0, sizeof(hs));
     memset(hv, 0, sizeof(hv));
     uint32_t n = 0;
-    for (int i = 0; i < SCAN_N_RAYS; ++i)
-        for (int j = 0; j < ref_end; ++j)
-            if (mask_usable(i, j)) { hs[g_s[i][j]]++; hv[g_v[i][j]]++; ++n; }
+    for (int i = 0; i < SCAN_N_RAYS; ++i) {
+        int usable = 0;
+        for (int j = 0; j < SCAN_RADIAL_N; ++j) if (mask_usable(i, j)) ++usable;
+        int take = (int)(usable * SCAN_REF_FRAC + 0.5f);
+        if (take < 1) continue;                 // fully masked bearing
+        for (int j = 0; j < SCAN_RADIAL_N && take; ++j) {
+            if (!mask_usable(i, j)) continue;
+            hs[g_s[i][j]]++; hv[g_v[i][j]]++; ++n; --take;
+        }
+    }
     if (!n) return false;
     robust_stats(hs, n, &out->floor_s, &out->floor_s_mad);
     robust_stats(hv, n, &out->floor_v, &out->floor_v_mad);
