@@ -15,6 +15,7 @@ Two things differ from a rotating lidar and are worth knowing:
 """
 
 import asyncio
+import contextlib
 import math
 import threading
 import time
@@ -127,8 +128,16 @@ class OmniRangeNode(Node):
 
     async def _session(self) -> None:
         target = self.device_address or await self._discover()
-        async with BleakClient(target, timeout=self.connect_timeout,
-                               **self._adapter_kwargs()) as client:
+        # BleakClient's own `timeout` only bounds the implicit discovery it does
+        # for a bare address; connect() itself waits forever on BlueZ. A unit
+        # whose previous link was not torn down cleanly stops advertising until
+        # supervision expires, and without this the node hangs there in silence
+        # -- no scan, no error, and a collision monitor that stops the robot
+        # because its source went quiet.
+        client = BleakClient(target, timeout=self.connect_timeout,
+                             **self._adapter_kwargs())
+        await asyncio.wait_for(client.connect(), timeout=self.connect_timeout)
+        try:
             await client.start_notify(proto.SCAN_UUID, self._on_notify)
             if self.scan_period_ms > 0:
                 await client.write_gatt_char(
@@ -141,6 +150,13 @@ class OmniRangeNode(Node):
                 await asyncio.sleep(0.25)
                 if time.monotonic() - self._last_scan_t > self.scan_timeout:
                     raise RuntimeError('no scan for %.1f s' % self.scan_timeout)
+        finally:
+            # Shielded: on shutdown this runs while the task is being cancelled,
+            # and an unshielded await would be cancelled straight away, leaving
+            # the unit measuring into a dead link.
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    asyncio.shield(client.disconnect()), timeout=5.0)
 
     async def _ble_loop(self) -> None:
         self._ble_task = asyncio.current_task()

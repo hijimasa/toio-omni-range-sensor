@@ -39,6 +39,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-${ROS_DISTRO}-diagnostic-updater ros-${ROS_DISTRO}-diagnostic-aggregator \
     ros-${ROS_DISTRO}-xacro ros-${ROS_DISTRO}-joint-state-publisher \
     ros-${ROS_DISTRO}-teleop-twist-keyboard \
+    ros-${ROS_DISTRO}-navigation2 \
     python3-opencv python3-numpy \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
