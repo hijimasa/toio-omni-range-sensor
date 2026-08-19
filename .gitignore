@@ -4,3 +4,9 @@ __pycache__/
 .pytest_cache/
 captures/
 # calib/*.json and calib/ignore_mask.png are the working calibration and are tracked
+
+# docs のスライドは生成物。make_*.py で作り直せるので追跡しない
+docs/figs/
+docs/*.png
+docs/*.pdf
+docs/*.pptx
