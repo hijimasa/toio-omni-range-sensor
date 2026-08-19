@@ -1,12 +1,12 @@
 {
-  "cx": 248.0,
-  "cy": 318.0,
-  "r_in": 70.0,
-  "r_out": 244.0,
+  "cx": 264.0,
+  "cy": 238.4,
+  "r_in": 25.6,
+  "r_out": 200.0,
   "theta0": 90.0,
   "ccw": true,
   "flip_radial": false,
   "n_rays": 72,
-  "frame_width": 320,
-  "frame_height": 320
+  "frame_width": 400,
+  "frame_height": 296
 }
