@@ -33,7 +33,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from omni_common import (DEFAULT_CALIB, PANO_H, PANO_W, Calib, add_source_args,
                          annotate_panorama, auto_circle, build_maps, coverage,
                          draw_overlay, first_frame, load_calib, open_source,
-                         save_calib, unwrap, check_frame)
+                         save_calib, unwrap, check_frame, add_framesize_arg,
+                         set_framesize, first_frame_at)
 
 
 def main():
@@ -45,10 +46,16 @@ def main():
                     help="panorama width in px (0.5 deg/px at 720)")
     ap.add_argument("--pano-height", type=int, default=PANO_H)
     ap.add_argument("--outdir", default="captures", help="where 'c' writes snapshots")
+    add_framesize_arg(ap)
     args = ap.parse_args()
 
+    # Pin the size before the first frame: the calibration this tool writes is
+    # stamped with the frame size and is only valid there, so the size has to be
+    # chosen here rather than left to whatever the unit happened to be left in.
+    set_framesize(args, args.set_framesize)
+
     cap = open_source(args)
-    frame = first_frame(cap)
+    frame = first_frame_at(cap, args.set_framesize)
     h, w = frame.shape[:2]
     print("frame %dx%d" % (w, h))
 

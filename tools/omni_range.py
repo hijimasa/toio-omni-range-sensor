@@ -37,7 +37,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from omni_common import (N_RAYS, PANO_H, PANO_W, RAY_STEP_DEG, DEFAULT_CALIB,
                          DEFAULT_MASK, add_source_args, annotate_panorama,
                          build_maps, col_to_bearing, first_frame, load_calib,
-                         load_mask, open_source, unwrap, RangeFit, check_frame)
+                         load_mask, open_source, unwrap, RangeFit, check_frame,
+                         add_framesize_arg, set_framesize, first_frame_at)
 
 COLS_PER_RAY = PANO_W // N_RAYS
 RANGE_SAMPLES = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -117,9 +118,18 @@ class RangeScanner:
         S = hsv[:, :, 1].astype(np.float32)
         V = hsv[:, :, 2].astype(np.float32)
 
+        # The reference is the inner slice of each column's *usable* rows, not
+        # the inner slice of the annulus. The dead zone the mirror makes of the
+        # unit itself is not one radius -- on the hemispherical mirror it runs
+        # 39-81 % of r_out with bearing -- so cutting the raw row index would
+        # leave the worst directions with no reference rows at all and model the
+        # floor from a biased handful of bearings. Must match scan.cpp.
         ref = self.mask.copy()
         if self.ref_frac < 1.0:
-            ref[int(ref.shape[0] * self.ref_frac):, :] = False
+            rank = np.cumsum(self.mask, axis=0)          # 1-based among usable
+            take = np.rint(self.mask.sum(axis=0) * self.ref_frac).astype(int)
+            take = np.maximum(take, 1)
+            ref = self.mask & (rank <= take[None, :])
         if not ref.any():
             ref = self.mask
         if not ref.any():
@@ -269,9 +279,40 @@ def to_records(result, cal, fit=None, frame_width=None):
     return out
 
 
+def warn_not_monotonic(path, cal):
+    """Check on the spot that the radius still grows with distance.
+
+    The README says to verify this by eye after every point, because a radius
+    that does not move (or moves backwards) means the scan latched onto
+    something other than the target, and the fit will still return a smooth
+    plausible curve through the wreckage. Doing it here means the session
+    cannot get to the end before anyone notices.
+    """
+    with open(path) as f:
+        s = json.load(f).get("samples", [])
+    if len(s) < 2:
+        return
+    row = (cal.r_out - cal.r_in) / float(PANO_H - 1)     # one panorama row, calib px
+    bad = []
+    for a, b in zip(s, s[1:]):
+        step = b["radius_px"] - a["radius_px"]
+        if step <= 0:
+            bad.append((a, b, step, "goes backwards"))
+        elif step < 2 * row:
+            bad.append((a, b, step, "under two panorama rows -- below what the "
+                                    "unwrap can resolve"))
+    for a, b, step, why in bad:
+        print("  WARNING: %.2f -> %.2f cm moves the radius by %+.1f calib px "
+              "(%+.1f rows): %s"
+              % (a["distance_cm"], b["distance_cm"], step, step / row, why))
+    if bad:
+        print("  Re-take those points before going on; a fit will hide this.")
+
+
 def print_table(records):
     hits = [r for r in records if r["hit"]]
-    print("%d/%d directions have an obstacle before the mirror rim" % (len(hits), N_RAYS))
+    print("%d/%d directions have an obstacle before the mirror rim "
+          "(radii in device px)" % (len(hits), N_RAYS))
     for r in records:
         if not r["hit"]:
             continue
@@ -303,10 +344,7 @@ def main():
                     help="consecutive radial samples required (rejects speckle)")
     ap.add_argument("--sat-gain", type=float, default=1.0)
     ap.add_argument("--val-gain", type=float, default=1.0)
-    ap.add_argument("--set-framesize", type=int, default=None, metavar="N",
-                    help="POST /ctrl?var=framesize first. VGA is NOT enough for "
-                         "this measurement -- 12 (XGA 1024x768) detects what "
-                         "UXGA does, VGA misses most of it")
+    add_framesize_arg(ap)
     ap.add_argument("--once", action="store_true", help="scan one frame and exit")
     ap.add_argument("--json", help="write the scan to this JSON file")
     ap.add_argument("--record-distance", type=float, metavar="CM",
@@ -319,6 +357,10 @@ def main():
                          "forward axis, so --record-distance is its "
                          "perpendicular distance; the sample is stored as "
                          "distance/cos(bearing)")
+    ap.add_argument("--record-repeat", type=int, default=1, metavar="N",
+                    help="record the median of N frames instead of one. The "
+                         "per-frame scatter is about the same as one cm of "
+                         "distance, so a single frame is not a measurement")
     ap.add_argument("--record-file", default=RANGE_SAMPLES)
     args = ap.parse_args()
 
@@ -347,19 +389,10 @@ def main():
                            args.threshold, args.val_threshold, args.min_run,
                            confirm=args.confirm)
 
-    if args.set_framesize is not None:
-        base = (args.url or args.still_url or "")
-        host = base.split("/")[2].split(":")[0] if "//" in base else None
-        if host:
-            import urllib.request
-            urllib.request.urlopen("http://%s/ctrl?var=framesize&val=%d"
-                                   % (host, args.set_framesize), timeout=5).read()
-            print("framesize -> %d" % args.set_framesize)
-            # the driver serves a couple of stale buffers after a size change
-            time.sleep(2.0)
+    set_framesize(args, args.set_framesize)
 
     cap = open_source(args)
-    frame = first_frame(cap)
+    frame = first_frame_at(cap, args.set_framesize)
     check_frame(cal, frame)
 
     if args.once:
@@ -369,6 +402,29 @@ def main():
         if args.record_distance is not None:
             i = int(round((args.record_bearing % 360.0) / RAY_STEP_DEG)) % N_RAYS
             rad = result["radii"][i]
+            if args.record_repeat > 1 and not np.isnan(rad):
+                # One frame is not a measurement here. With the target held
+                # still the radius scatters by a couple of panorama rows
+                # (measured: sd 2.4 calibration px at 8 cm), which is the same
+                # size as the change one centimetre of distance buys. The
+                # median of a handful of frames pulls that down by ~sqrt(n)
+                # and, unlike a mean, ignores the occasional frame where the
+                # scan latches onto something else entirely.
+                shots = [rad]
+                while len(shots) < args.record_repeat:
+                    f2 = cap.read()
+                    if f2 is None:
+                        time.sleep(0.05)
+                        continue
+                    r2 = scanner.scan(f2)["radii"][i]
+                    if not np.isnan(r2):
+                        shots.append(r2)
+                    time.sleep(0.15)
+                a = np.array(shots)
+                rad = float(np.median(a))
+                print("%d frames at %+.1f deg: median %.1f, sd %.1f, spread %.1f "
+                      "device px" % (len(a), args.record_bearing, rad, a.std(),
+                                     a.max() - a.min()))
             if np.isnan(rad):
                 print("no detection at %+.1f deg -- nothing recorded"
                       % args.record_bearing)
@@ -378,10 +434,15 @@ def main():
                     d /= max(np.cos(np.deg2rad(args.record_bearing)), 1e-3)
                 added, n = record_sample(args.record_file, d,
                                          args.record_bearing, rad, frame.shape[1])
-                print("recorded %.2f cm -> radius %.1f px (calib scale); "
-                      "%d sample(s) in %s"
-                      % (added["distance_cm"], added["radius_px"],
+                # Both scales. The table above is in device pixels and the
+                # file is in calibration pixels (the 640-wide scale that keeps
+                # samples from different framesizes comparable); printing one
+                # number labelled "px" made the two look like a disagreement.
+                print("recorded %.2f cm -> radius %.1f device px "
+                      "= %.1f calib px; %d sample(s) in %s"
+                      % (added["distance_cm"], rad, added["radius_px"],
                          n, args.record_file))
+                warn_not_monotonic(args.record_file, cal)
                 # Compare against where the mask actually opens up in THIS
                 # direction, not the global r_in: the reflection reaches
                 # different radii in different directions.

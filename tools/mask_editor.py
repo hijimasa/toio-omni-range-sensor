@@ -32,7 +32,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from omni_common import (DEFAULT_CALIB, DEFAULT_MASK, PANO_H, PANO_W,
                          add_source_args, annotate_panorama, auto_mask,
                          build_maps, first_frame, load_calib, load_mask,
-                         open_source, save_mask, unwrap, check_frame)
+                         open_source, save_mask, unwrap, check_frame,
+                         add_framesize_arg, set_framesize, first_frame_at)
 
 ZOOM = 2          # the panorama is only 200 px tall; painting it 1:1 is fiddly
 
@@ -85,11 +86,16 @@ def main():
     add_source_args(ap)
     ap.add_argument("--calib", default=DEFAULT_CALIB)
     ap.add_argument("--mask", default=DEFAULT_MASK)
+    add_framesize_arg(ap)
     args = ap.parse_args()
+
+    # The mask is in panorama coordinates, which come from the calibration,
+    # which is only valid at one frame size -- so this has to be pinned too.
+    set_framesize(args, args.set_framesize)
 
     cal = load_calib(args.calib)
     cap = open_source(args)
-    frame = first_frame(cap)
+    frame = first_frame_at(cap, args.set_framesize)
     check_frame(cal, frame)
     maps = build_maps(cal.scaled_to(frame.shape[1]), PANO_W, PANO_H)
 

@@ -233,6 +233,118 @@ def first_frame(cap, timeout=20.0):
         time.sleep(0.05)
 
 
+# --------------------------------------------------------- camera framesize ---
+
+# The esp32-camera framesize enum, as of the version arduino-esp32 3.3.7 ships.
+# Two things make this worth spelling out rather than passing a bare number:
+# the values move between library versions (VGA is 10 here, 8 on older ones),
+# and several modes are a crop of the sensor rather than a scaled view of the
+# same field. A calibration does not carry across either change, so a tool that
+# selects a size has to check what actually came back.
+#   name, width, height, is_crop
+FRAMESIZES = {
+    5:  ("240X240",  240,  240, True),
+    6:  ("QVGA",     320,  240, False),
+    7:  ("320X320",  320,  320, True),
+    8:  ("CIF",      400,  296, False),
+    9:  ("HVGA",     480,  320, True),
+    10: ("VGA",      640,  480, False),
+    11: ("SVGA",     800,  600, False),
+    12: ("XGA",     1024,  768, False),
+    13: ("HD",      1280,  720, True),
+    14: ("SXGA",    1280, 1024, True),
+    15: ("UXGA",    1600, 1200, False),
+}
+
+
+def add_framesize_arg(ap):
+    ap.add_argument("--set-framesize", type=int, default=None, metavar="N",
+                    help="switch the unit to this framesize first: "
+                         + ", ".join("%d=%s %dx%d%s"
+                                     % (k, v[0], v[1], v[2], " CROP" if v[3] else "")
+                                     for k, v in sorted(FRAMESIZES.items())
+                                     if k in (6, 7, 8, 10, 12))
+                         + ". Sizes marked CROP are a sensor crop, not a scaled "
+                           "view -- a calibration never carries between them.")
+
+
+def source_host(args):
+    """Host to send /ctrl to. The stream lives on :81, the control server on 80."""
+    base = (getattr(args, "url", None) or getattr(args, "still_url", None)
+            or getattr(args, "_default_url", None) or "")
+    if "//" not in base:
+        return None
+    return base.split("/")[2].split(":")[0]
+
+
+def set_framesize(args, n, settle=2.0):
+    """Pin the unit's framesize, before the source is opened.
+
+    Done from the tool rather than by hand because the calibration is only
+    valid at the size it was taken on: pinning it with the same command that
+    starts the measurement is the only way the two cannot drift apart.
+    """
+    if n is None:
+        return None
+    host = source_host(args)
+    if host is None:
+        print("note: --set-framesize needs --url or --still-url; ignoring it")
+        return None
+    urllib.request.urlopen("http://%s/ctrl?var=framesize&val=%d" % (host, n),
+                           timeout=5).read()
+    print("framesize -> %d (%s)" % (n, FRAMESIZES.get(n, ("?",))[0]))
+    # The sensor needs a moment, and /still keeps handing back two or three
+    # frames from the old buffer immediately after the change.
+    time.sleep(settle)
+    try:
+        st = json.loads(urllib.request.urlopen("http://%s/status" % host,
+                                               timeout=5).read().decode())
+        got = int(st.get("framesize", -1))
+        if got != n:
+            print("WARNING: the unit reports framesize %d, not %d" % (got, n))
+        return got
+    except Exception as e:                     # noqa: BLE001 - diagnostic only
+        print("note: could not read /status back (%s)" % e)
+        return None
+
+
+def first_frame_at(cap, n, timeout=20.0):
+    """First frame that is really the size framesize `n` should produce.
+
+    The unit applies the change at once -- /status agrees immediately -- but the
+    stream keeps serving buffers captured at the old size for a frame or two
+    (measured on this unit: after switching to CIF the next frame delivered was
+    still 640x480). Taking whatever arrives first would calibrate the new
+    geometry against the old picture, and nothing about the result would look
+    wrong. So drop frames until the size matches, and say so if it never does --
+    the enum value itself moves between esp32-camera versions.
+    """
+    frame = first_frame(cap, timeout)
+    if n is None or n not in FRAMESIZES:
+        return frame
+    name, w, h, _ = FRAMESIZES[n]
+    # read() hands back the newest frame every call, not the next one, so this
+    # polls on a timer rather than counting reads -- a spin here would "drop"
+    # tens of thousands of copies of the same frame.
+    t0 = time.time()
+    while (frame.shape[1], frame.shape[0]) != (w, h):
+        if time.time() - t0 > timeout:
+            print("WARNING: asked for framesize %d (%s, %dx%d) but the frames "
+                  "are still %dx%d after %.0f s. Check the framesize enum in "
+                  "sensor.h for this build before calibrating anything."
+                  % (n, name, w, h, frame.shape[1], frame.shape[0], timeout))
+            return frame
+        time.sleep(0.05)
+        nxt = cap.read()
+        if nxt is not None:
+            frame = nxt
+    waited = time.time() - t0
+    if waited > 0.15:
+        print("waited %.1f s for the stream to catch up with the size change"
+              % waited)
+    return frame
+
+
 # ------------------------------------------------------------- calibration ---
 
 class Calib:

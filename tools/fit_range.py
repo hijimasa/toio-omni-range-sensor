@@ -63,6 +63,38 @@ def fit(distances, radii):
     return res.x, res
 
 
+def check_samples_frame(samples, cal, path):
+    """Refuse samples that were taken at a different framesize than the calibration.
+
+    record_sample() appends, so this file accumulates across rebuilds -- two
+    mirrors and three framesizes have passed through it already. The radii are
+    stored in calibration pixels, which makes samples from different framesizes
+    look directly comparable, and the fit blends them into one curve without
+    complaining. That is a plausible average of two geometries, and nothing
+    downstream can tell. Some camera modes crop rather than scale, so the shared
+    pixel scale is a fiction across a framesize change.
+    """
+    widths = sorted({int(x["frame_width"]) for x in samples if x.get("frame_width")})
+    if not cal.frame_width:
+        if len(widths) > 1:
+            raise SystemExit("%s mixes samples from %s -- they cannot share one fit"
+                             % (path, " and ".join("%dpx-wide frames" % w for w in widths)))
+        return
+    cal_w = int(cal.frame_width)
+    stale = [w for w in widths if w != cal_w]
+    if stale:
+        raise SystemExit(
+            "%s holds %d sample(s) taken at %s, but the calibration is for "
+            "%dx%d frames. Different framesizes are not a rescaling of each "
+            "other, so these cannot go in one fit.\n"
+            "Move the old ones aside and re-record:\n"
+            "    mv %s %s.bak"
+            % (path, sum(1 for x in samples
+                         if int(x.get("frame_width", 0)) in stale),
+               " and ".join("%dpx wide" % w for w in stale),
+               cal_w, int(cal.frame_height or cal_w), path, path))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -82,13 +114,15 @@ def main():
     if len(s) < 3:
         raise SystemExit("need at least 3 samples to fit 3 parameters; have %d" % len(s))
 
+    cal = load_calib()
+    check_samples_frame(s, cal, args.samples)
+
     d = [x["distance_cm"] for x in s]
     r = [x["radius_px"] for x in s]
     p, res = fit(d, r)
     resid = model(p, np.array(d)) - np.array(r)
     rms = float(np.sqrt(np.mean(resid ** 2)))
 
-    cal = load_calib()
     vmin, vmax = args.valid_range if args.valid_range else (min(d), max(d))
     print("samples : %d over %.1f-%.1f cm" % (len(s), min(d), max(d)))
     if args.valid_range:
