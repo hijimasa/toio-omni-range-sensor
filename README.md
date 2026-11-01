@@ -1,141 +1,143 @@
+[English](README.md) | [日本語](README.ja.md)
+
 # toio-omni-range-sensor
 
-![デモ動画](./figs/toio-omni-range.gif)
+![Demo video](./figs/toio-omni-range.gif)
 
-*nav2 で障害物を避けて走っているところ。左が RViz（LaserScan と経路）、右が実機。現行構成（黄色ホルダー・半球鏡）、実時間、8 fps。*
+*Driving around obstacles under nav2. Left: RViz (LaserScan and path), right: the real robot. Current configuration (yellow holder, hemispherical mirror), real time, 8 fps.*
 
-toio 用の全周距離センサ。M5Stack **Timer Camera F** と凸面鏡を組み合わせたカタディオプトリック系で
-全周を 1 枚の画像に写し、地面と物体の**彩度差**から 5 度刻み・72 方向の距離を出す。
+An omnidirectional range sensor for toio. A catadioptric system combining an M5Stack **Timer Camera F** with a convex mirror
+captures the full 360 degrees in a single image, and the **saturation difference** between the floor and objects yields distances in 72 bearings at 5-degree steps.
 
-現在のステータス: **ステップ 6 まで実機で動作**（上の動画は RViz に出た LaserScan）
+Current status: **working on real hardware through Step 6** (the video above is the LaserScan shown in RViz)
 
-| ステップ | 内容 | 状態 |
+| Step | Content | Status |
 |---|---|---|
-| 1 | Timer Camera F の映像を取得し、凸面鏡で全周が写ることを確認 | 完了 |
-| 2 | 環状画像 → パノラマ展開のキャリブレーション（中心・内外半径） | 完了（`omni_viewer.py`） |
-| 3 | 彩度ベースの地面／物体境界検出 → 72 方向の半径 | 完了（`omni_range.py`） |
-| 4 | 半径 → 距離への変換（鏡形状の校正） | 完了（`fit_range.py`、6 点 rms 0.9 px）|
-| 5 | オンデバイス処理と BLE 出力 | 完了（4.1 Hz、取りこぼし 0）|
-| 6 | ROS 2 への出力（LaserScan） | 完了（RViz で確認） |
+| 1 | Grab video from the Timer Camera F and confirm the convex mirror captures the full 360 degrees | Done |
+| 2 | Calibration of the annular image -> panorama unwrapping (center, inner/outer radius) | Done (`omni_viewer.py`) |
+| 3 | Saturation-based floor/object boundary detection -> radius in 72 bearings | Done (`omni_range.py`) |
+| 4 | Radius -> distance conversion (calibration of the mirror shape) | Done (`fit_range.py`, 6 points, rms 0.9 px)|
+| 5 | On-device processing and BLE output | Done (4.1 Hz, 0 dropped packets)|
+| 6 | Output to ROS 2 (LaserScan) | Done (verified in RViz) |
 
-## 現在の構成
+## Current configuration
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
-| 鏡 | uxcell ステンレス製中空半球、直径約 60 mm |
-| ホルダー | `stl/mirror_holder.stl`（黄色、腕 4 本）。鏡とカメラの位置を固定する |
-| 測定 framesize | **CIF 400x296**（RGB565）。全画角が入る中でいちばん速い |
-| 較正 | `cx=265.6, cy=235.7, r_in=25.6, r_out=200`（640 幅換算） |
-| 距離フィット | `r(d) = -8.31 + 115.76*arctan(d/7.300)`、実測 4.5〜21 cm、rms 0.9 px |
-| LaserScan の範囲 | **0.036 〜 0.233 m** |
-| レート | 4.1 Hz（`scan_period` 200 ms） |
-| フレームの鮮度 | 測定するフレームは約 98 ms 前のもの |
+| Mirror | uxcell stainless-steel hollow hemisphere, about 60 mm in diameter |
+| Holder | `stl/mirror_holder.stl` (yellow, 4 arms). Fixes the position of the mirror relative to the camera |
+| Measurement framesize | **CIF 400x296** (RGB565). The fastest mode that still holds the full field of view |
+| Calibration | `cx=265.6, cy=235.7, r_in=25.6, r_out=200` (in 640-width units) |
+| Distance fit | `r(d) = -8.31 + 115.76*arctan(d/7.300)`, measured over 4.5 to 21 cm, rms 0.9 px |
+| LaserScan range | **0.036 to 0.233 m** |
+| Rate | 4.1 Hz (`scan_period` 200 ms) |
+| Frame freshness | The frame being measured is about 98 ms old |
 
-**この表の数字は測定 framesize と一体**で、解像度を変えると較正は移らない（後述）。
+**The numbers in this table are tied to the measurement framesize**; the calibration does not carry over if you change the resolution (see below).
 
-数字の出どころは以下の各ステップに書いてある。**凸面鏡 → 円錐 → 半球ステンレスと鏡を 3 回替えている**。
-前の鏡での実測と、採用しなかった案（円錐・六角錐）の検討は [NOTES.md](NOTES.md) に分けてある。
+Where each number comes from is written in the steps below. **The mirror has been replaced three times: convex mirror -> cone -> stainless hemisphere.**
+Measurements with the earlier mirrors and the designs that were not adopted (cone, hexagonal pyramid) are split out into [NOTES.md](NOTES.md).
 
 ---
 
-## 構成
+## Layout
 
 ```
-firmware/timercam_stream/   Timer Camera F 用 PlatformIO プロジェクト（MJPEG 配信）
-tools/omni_common.py        フレーム取得・パノラマ展開・較正・マスクの共通実装
-tools/omni_viewer.py        ビューア。全周判定と鏡の較正（cx,cy,r_in,r_out,theta0）
-tools/mask_editor.py        無視領域マスクの作成（自動生成＋手描き修正）
-tools/omni_range.py         ステップ 3 本体。72 方向の地面／物体境界を検出
-tools/fit_range.py           ステップ 4。半径 → 距離のフィット
-tools/make_synthetic_omni.py  ハード無しでツールを試すための合成画像生成
-tools/ble_client.py         BLE でスキャンを受信する CLI
-tools/gen_firmware_calib.py 較正 → デバイス用 C ヘッダ・ROS パラメータの生成
-calib/mirror_calib.json     鏡のキャリブレーション
-calib/ignore_mask.png       無視領域マスク（パノラマ座標、白=使う / 黒=無視）
-stl/mirror_holder.stl       鏡ホルダー（3D プリント用）
-ros2/toio_omni_range/       ROS 2 ドライバ。BLE → sensor_msgs/LaserScan
-  toio_omni_range/omni_protocol.py  パケット定義（ble_client.py と共有）
-ros2/toio_omni_bringup/     toio_ros2 と一緒に起動する bringup、nav2 launch、collision_monitor、マットの地図
-ros2/toio_omni_mapping/     マットを走り回って地図を作る（Position ID を真値にした占有格子）
-docker/                     ROS 2 用コンテナ（このリポジトリに ROS は要らない）
+firmware/timercam_stream/   PlatformIO project for the Timer Camera F (MJPEG streaming)
+tools/omni_common.py        Shared implementation: frame grabbing, panorama unwrapping, calibration, mask
+tools/omni_viewer.py        Viewer. 360-degree check and mirror calibration (cx,cy,r_in,r_out,theta0)
+tools/mask_editor.py        Creates the ignore mask (auto-generation plus hand correction)
+tools/omni_range.py         Step 3 proper. Detects the floor/object boundary in 72 bearings
+tools/fit_range.py           Step 4. Radius -> distance fit
+tools/make_synthetic_omni.py  Synthetic image generator for trying the tools without hardware
+tools/ble_client.py         CLI that receives scans over BLE
+tools/gen_firmware_calib.py Calibration -> C header for the device and ROS parameters
+calib/mirror_calib.json     Mirror calibration
+calib/ignore_mask.png       Ignore mask (panorama coordinates, white = use / black = ignore)
+stl/mirror_holder.stl       Mirror holder (for 3D printing)
+ros2/toio_omni_range/       ROS 2 driver. BLE -> sensor_msgs/LaserScan
+  toio_omni_range/omni_protocol.py  Packet definition (shared with ble_client.py)
+ros2/toio_omni_bringup/     Bringup that starts together with toio_ros2, nav2 launch, collision_monitor, map of the mat
+ros2/toio_omni_mapping/     Drive around the mat and build a map (occupancy grid with Position ID as ground truth)
+docker/                     Container for ROS 2 (this repository itself does not need ROS)
 ```
 
-## ROS 2 ワークスペースへの組み込み
+## Using this repository in a ROS 2 workspace
 
-**このリポジトリは、そのまま `colcon_ws/src/` に置いて（またはサブモジュールにして）よい。**
-colcon は `package.xml` のあるディレクトリしか拾わないので、`firmware/` `tools/` `calib/` は
-無視され、ビルドされるのは `ros2/` の 3 パッケージだけになる。
+**This repository can be placed directly under `colcon_ws/src/` (or added as a submodule).**
+colcon only picks up directories that contain a `package.xml`, so `firmware/` `tools/` `calib/` are
+ignored and only the 3 packages under `ros2/` get built.
 
 ```bash
 cd colcon_ws/src
-git submodule add https://github.com/<you>/toio-omni-range-sensor.git   # または git clone
-pip install bleak            # rosdep では解決できない唯一の依存
+git submodule add https://github.com/<you>/toio-omni-range-sensor.git   # or git clone
+pip install bleak            # the only dependency rosdep cannot resolve
 cd .. && colcon build --symlink-install
 ```
 
-| パッケージ | 中身 | 依存 |
+| Package | Contents | Dependencies |
 |---|---|---|
-| `toio_omni_range` | センサのドライバ。BLE → `sensor_msgs/LaserScan` | rclpy、bleak |
-| `toio_omni_bringup` | キューブ（`toio_ros2`）とセンサを一緒に上げる bringup、nav2、collision_monitor | `toio_ros2`、navigation2 |
-| `toio_omni_mapping` | マットの地図作成 | `toio_omni_bringup`、nav2_map_server |
+| `toio_omni_range` | Sensor driver. BLE -> `sensor_msgs/LaserScan` | rclpy, bleak |
+| `toio_omni_bringup` | Bringup that starts the cube (`toio_ros2`) and the sensor together, nav2, collision_monitor | `toio_ros2`, navigation2 |
+| `toio_omni_mapping` | Map building of the mat | `toio_omni_bringup`, nav2_map_server |
 
-センサだけ使うなら `toio_omni_range` だけで足り、`toio_ros2` が無くてもビルドは通る
-（bringup と mapping は exec_depend なので、無い依存は起動時にだけ効く）。
+If you only want the sensor, `toio_omni_range` alone is enough, and the build passes without `toio_ros2`
+(bringup and mapping declare it as exec_depend, so a missing dependency only matters at launch time).
 
-`docker/` はこの配置をそのまま使っている。隣に `toio_ros2_dev_kit` がチェックアウトされて
-いればキューブのドライバ `toio_ros2` もマウントされる。
+`docker/` uses exactly this layout. If `toio_ros2_dev_kit` is checked out next to it,
+the cube driver `toio_ros2` is mounted as well.
 
-## ハードウェア
+## Hardware
 
-<img src="./figs/robot.jpg" width="320" alt="toio の上に Timer Camera F、その上に黄色のホルダーと半球鏡">
+<img src="./figs/robot.jpg" width="320" alt="Timer Camera F on top of a toio, with the yellow holder and hemispherical mirror above it">
 
-| 部品 | 役割 |
+| Part | Role |
 |---|---|
-| toio コアキューブ | 台車。平らなトッププレートの上にすべてを載せる |
-| M5Stack Timer Camera F（K034-F） | ESP32 + OV3660 + 魚眼レンズ。レンズを真上に向けて置く |
-| 鏡ホルダー `stl/mirror_holder.stl` | 3D プリント品。カメラのレンズ周りに座り、腕 4 本で鏡を支える |
-| uxcell ステンレス製中空半球（直径約 60 mm、[Amazon](https://amzn.asia/d/084Gm1Y4)） | 凸面を下（カメラ側）に向けてホルダーのリングに載せる |
+| toio Core Cube | Base vehicle. Everything sits on its flat top plate |
+| M5Stack Timer Camera F (K034-F) | ESP32 + OV3660 + fisheye lens. Mounted with the lens pointing straight up |
+| Mirror holder `stl/mirror_holder.stl` | 3D-printed part. Sits around the camera lens and supports the mirror with 4 arms |
+| uxcell stainless-steel hollow hemisphere (about 60 mm in diameter, [Amazon](https://amzn.asia/d/084Gm1Y4)) | Placed on the holder's ring with the convex side facing down (toward the camera) |
 
-組み立ては下から順に、
+Assembly, from the bottom up:
 
-1. toio のトッププレートに Timer Camera F を**両面テープ**で貼る（レンズが上）。
-2. カメラの上にホルダーの基部を載せ、**ホットグルー**で固定する。
-3. ホルダーのリングに鏡を載せ、縁を**ホットグルー**で固定する。
+1. Stick the Timer Camera F to the toio top plate with **double-sided tape** (lens up).
+2. Place the base of the holder on the camera and fix it with **hot glue**.
+3. Place the mirror on the holder's ring and fix its rim with **hot glue**.
 
-ホルダー・鏡の接着はすべてホットグルーで、外して付け直せる。ただし
-**鏡とカメラの距離・傾き・ホルダーの回転が変わると較正とマスクは移らない。**
-付け直したらステップ 2〜4（中心、マスク、距離フィット）をやり直すこと。
-腕の方位（+48 / +138 / −134 / −44 度）はホルダーが toio の前方に対してどう回って
-付いているかで決まり、いまのマスクはこの個体の取り付けに対するものになっている。
+All holder and mirror joints are hot glue, so they can be removed and reattached. However,
+**if the mirror-to-camera distance, tilt, or holder rotation changes, the calibration and the mask do not carry over.**
+After reattaching, redo Steps 2 to 4 (center, mask, distance fit).
+The bearings of the arms (+48 / +138 / -134 / -44 degrees) depend on how the holder is rotated relative to the
+front of the toio, and the current mask is specific to this unit's mounting.
 
-ホルダーが黄色なのは意図的で、鏡に写り込む基部と腕を**色相でマスクする**ため
-（ステップ 3 の「ホルダーは色相で落とす」）。別の色で刷るなら `--holder-hue` を合わせる。
+The holder is yellow on purpose: the base and arms reflected in the mirror are **masked by hue**
+("Masking the holder by hue" in Step 3). If you print it in another color, adjust `--holder-hue` accordingly.
 
-ピン配置は [m5stack/TimerCam-arduino](https://github.com/m5stack/TimerCam-arduino) に合わせてある。
+The pin assignment follows [m5stack/TimerCam-arduino](https://github.com/m5stack/TimerCam-arduino).
 
-| 用途 | GPIO |
+| Purpose | GPIO |
 |---|---|
-| 電源保持（LDO ホールド） | 33 |
+| Power hold (LDO hold) | 33 |
 | LED | 2 |
-| バッテリ電圧 ADC | 38 |
-| カメラ XCLK / SIOD / SIOC | 27 / 25 / 23 |
+| Battery voltage ADC | 38 |
+| Camera XCLK / SIOD / SIOC | 27 / 25 / 23 |
 
-**GPIO33 を HIGH に保持しないとバッテリ駆動時に電源が落ちる。** `setup()` の先頭で立てている。
+**If GPIO33 is not held HIGH, the power cuts out when running on battery.** It is raised at the very start of `setup()`.
 
-カメラが上向き、その上に凸面鏡が下向きなので、画像にはドーナツ状（環状）に周囲が写り、
-中心付近はカメラとホルダー基部の映り込み、外周が水平方向（遠方）に対応する。
+With the camera facing up and the convex mirror above it facing down, the surroundings appear in the image as a donut (annulus):
+the area near the center is the reflection of the camera and holder base, and the outer rim corresponds to the horizontal direction (far away).
 
-## ファームウェアの書き込み
+## Flashing the firmware
 
 ```bash
 cd firmware/timercam_stream
 cp include/wifi_config.h.example include/wifi_config.h
-$EDITOR include/wifi_config.h        # WIFI_SSID を空のままにすると AP モードで起動
+$EDITOR include/wifi_config.h        # leave WIFI_SSID empty to boot in AP mode
 ~/.platformio/penv/bin/pio run -t upload
 ~/.platformio/penv/bin/pio device monitor
 ```
 
-シリアルに URL が出る。
+The URL is printed on the serial port.
 
 ```
 joining "..."........
@@ -143,386 +145,384 @@ STA  http://192.168.128.161/
      http://192.168.128.161:81/stream
 ```
 
-`WIFI_SSID` が空、または join に失敗した場合は SSID `TimerCamF-XXXX` /
-パスワード `omnivision` の AP を立てて `http://192.168.4.1/` になる。
-ただし AP モードは実用にならない（下記「接続方式の選び方」）。
+If `WIFI_SSID` is empty or the join fails, it brings up an AP with SSID `TimerCamF-XXXX` /
+password `omnivision` and becomes `http://192.168.4.1/`.
+However, AP mode is not usable in practice (see "Choosing the connection mode" below).
 
-エンドポイント:
+Endpoints:
 
-| URL | 内容 |
+| URL | Content |
 |---|---|
-| `http://<ip>/` | ブラウザ用オーバーレイ UI（鏡の円と 72 本の光線を重ねて表示） |
-| `http://<ip>/still` | JPEG 1 枚 |
-| `http://<ip>/status` | センサ設定と電池電圧の JSON |
-| `http://<ip>/log` | 直近 4KB の起動・動作ログ（シリアルの代替） |
-| `http://<ip>/ctrl?var=saturation&val=2` | カメラ設定変更 |
-| `http://<ip>:81/stream` | MJPEG ストリーム |
+| `http://<ip>/` | Overlay UI for the browser (draws the mirror circles and the 72 rays over the image) |
+| `http://<ip>/still` | A single JPEG |
+| `http://<ip>/status` | JSON with the sensor settings and battery voltage |
+| `http://<ip>/log` | The last 4KB of boot/runtime log (substitute for serial) |
+| `http://<ip>/ctrl?var=saturation&val=2` | Change camera settings |
+| `http://<ip>:81/stream` | MJPEG stream |
 
-ストリームだけポート 81 なのは、multipart のレスポンスが長時間居座って
-他のリクエストを塞ぐのを避けるため（esp32-camera の定番構成）。
+Only the stream is on port 81, so that the long-lived multipart response does not
+block other requests (the standard esp32-camera arrangement).
 
-## 接続方式の選び方（重要）
+## Choosing the connection mode (important)
 
-**AP モードは混雑した 2.4GHz 帯では実用にならない。** 実測では、ストリームを
-流していないアイドル状態ですら ping が 33% ロスし、負荷をかけると 72%、
-最終的には association ごと切れた。周囲に 2.4GHz の AP が 28 台あり、
-チャンネル変更（干渉スコアを全 ch で計算）でも改善しない。
+**AP mode is unusable in a crowded 2.4GHz band.** Measured: even idle, with no stream
+running, ping lost 33%; under load 72%; and eventually the association itself dropped. There are 28 2.4GHz APs
+nearby, and changing the channel (interference score computed for every channel) did not help.
 
-**STA モード（既存ルータ経由）を使うこと。** PC が有線であれば、弱い無線区間が
-経路から消えるので劇的に安定する。`wifi_config.h` の `WIFI_SSID` / `WIFI_PASS` を
-設定すれば STA モードで起動する。
+**Use STA mode (through an existing router).** If the PC is wired, the weak wireless hop disappears
+from the path and things become dramatically stable. Set `WIFI_SSID` / `WIFI_PASS` in `wifi_config.h`
+and it boots in STA mode.
 
-AP モードしか使えない場合は、`/ctrl?var=interval&val=<ms>` でフレーム間隔を
-広げて throughput を落とす（既定 150ms ≒ 6.7fps）。ただしこれは延命策であって
-解決ではない（実測で切断までの時間が 7 秒 → 22 秒に伸びただけ）。
+If AP mode is the only option, widen the frame interval with `/ctrl?var=interval&val=<ms>`
+to lower the throughput (default 150ms, about 6.7fps). This is a stopgap, not
+a fix (measured: time to disconnect only grew from 7 s to 22 s).
 
-## 較正の全体手順
+## Calibration, end to end
 
-鏡・ホルダー・カメラのどれかを動かしたら、ここから通す。
+Whenever the mirror, holder, or camera is moved, go through this from the top.
 
-1. **較正ビルドを焼く**: `wifi_config.h` の `START_WIFI_AT_BOOT` を 1 にして書き込む。
-   測定ビルド（既定の 0）は BLE から WiFi を起こせても、ヒープ不足で JPEG に切り替えられず
-   `/still` と `/stream` が応答しない（「既知の制約」）。
-2. **中心と半径**（ステップ 2）: `omni_viewer.py --set-framesize 8` で `cx, cy, r_in, r_out` を
-   合わせて `s`。`theta0=90, ccw=true` は触らない（「撮像設定と方位の規約」）。
-3. **マスク**（ステップ 3）: 床に何も置かず `mask_editor.py --set-framesize 8 --holder-hue 15 40 --far-radius 139`
-   で `a` → 手直し → `s`。
-4. **距離**（ステップ 4）: 既知距離に対象を置いて `omni_range.py --record-distance <cm> --record-repeat 7` を
-   距離ごとに繰り返し、`fit_range.py --write --valid-range <min> <max>`。
-5. **デバイスへ**（ステップ 5）: `gen_firmware_calib.py` で `scan_calib.h` と ROS の yaml を生成し、
-   `START_WIFI_AT_BOOT` を 0 に戻して書き込む。
-6. **確認**: `ble_client.py --seconds 20` で空の床にヒットが出ないこと、既知位置の物体が
-   正しい方位・距離に出ること。
+1. **Flash the calibration build**: set `START_WIFI_AT_BOOT` in `wifi_config.h` to 1 and flash.
+   The measurement build (default 0) can bring up WiFi from BLE, but it cannot switch to JPEG due to lack of heap, so
+   `/still` and `/stream` do not respond ("Known limitations").
+2. **Center and radii** (Step 2): adjust `cx, cy, r_in, r_out` with `omni_viewer.py --set-framesize 8`
+   and press `s`. Do not touch `theta0=90, ccw=true` ("Capture settings and bearing convention").
+3. **Mask** (Step 3): with nothing on the floor, run `mask_editor.py --set-framesize 8 --holder-hue 15 40 --far-radius 139`,
+   press `a` -> fix by hand -> `s`.
+4. **Distance** (Step 4): place a target at a known distance and repeat `omni_range.py --record-distance <cm> --record-repeat 7`
+   for each distance, then `fit_range.py --write --valid-range <min> <max>`.
+5. **To the device** (Step 5): generate `scan_calib.h` and the ROS yaml with `gen_firmware_calib.py`,
+   set `START_WIFI_AT_BOOT` back to 0 and flash.
+6. **Verify**: with `ble_client.py --seconds 20`, check that an empty floor produces no hits and that an object at a known
+   position appears at the correct bearing and distance.
 
-## 全周視野の確認
+## Checking the 360-degree view
 
 ```bash
 pip install -r tools/requirements.txt
 tools/omni_viewer.py --url http://<ip>:81/stream --set-framesize 8
 
-# リンクが不安定なとき: MJPEG の代わりに /still を毎秒 N 回取りに行く
+# When the link is unstable: fetch /still N times per second instead of MJPEG
 tools/omni_viewer.py --still-url http://<ip>/still --still-rate 4 --set-framesize 8
 ```
 
-ストリームが無音のまま止まる（ソケットは開いたまま）症状に備えて、4 秒フレームが
-来なければ自動再接続する。再接続回数は raw ウィンドウの `drops` に出る。
+To cope with the stream silently stalling (socket stays open), it reconnects automatically if no frame
+arrives for 4 seconds. The reconnect count is shown as `drops` in the raw window.
 
-3 つのウィンドウが出る。
+Three windows appear.
 
-- **raw** — 生画像。緑の円＝鏡の外縁、橙の円＝中心のカメラ映り込み、水色の線＝5 度刻みの 72 方向。
-  上部に `360deg inside frame: YES/NO (xx%)` と出る。**これが全周確認の判定**で、
-  外周円が画像からはみ出していると NO になる（＝その方向は視野外）。
-- **panorama** — 環状部分を「横=方位角 / 縦=半径」に展開したもの。30 度ごとに目盛。
-- **saturation** — パノラマの彩度チャンネル。ステップ 3 で閾値処理する対象の下見用。
+- **raw** — the raw image. Green circle = outer rim of the mirror, orange circle = camera reflection at the center, cyan lines = the 72 bearings at 5-degree steps.
+  `360deg inside frame: YES/NO (xx%)` is shown at the top. **This is the verdict of the 360-degree check**;
+  it says NO when the outer circle extends beyond the image (that direction is out of view).
+- **panorama** — the annulus unwrapped as "horizontal = bearing / vertical = radius". Ticks every 30 degrees.
+- **saturation** — the saturation channel of the panorama. A preview of what gets thresholded in Step 3.
 
-トラックバーで `cx, cy, r_in, r_out, theta0` を合わせる。キー操作:
+Adjust `cx, cy, r_in, r_out, theta0` with the trackbars. Keys:
 
-| キー | 動作 |
+| Key | Action |
 |---|---|
-| `a` | Hough 変換で鏡の外縁を自動推定（あくまで初期値） |
-| `s` | `calib/mirror_calib.json` に保存（次回起動時に自動読み込み） |
-| `c` | raw / overlay / pano / sat を PNG で保存 |
-| `q` | 終了 |
+| `a` | Auto-estimate the outer rim of the mirror with a Hough transform (an initial guess only) |
+| `s` | Save to `calib/mirror_calib.json` (loaded automatically on the next start) |
+| `c` | Save raw / overlay / pano / sat as PNG |
+| `q` | Quit |
 
-`ccw` は方位角を増やす向き、`flip_r` はパノラマ上下（内周↔外周）の入れ替え。
-凸面鏡は像を左右反転させるので、実空間の回転方向と一致させるのに `ccw` を使う。
+`ccw` is the direction in which the bearing increases, `flip_r` swaps the panorama top and bottom (inner <-> outer).
+A convex mirror mirrors the image left to right, so `ccw` is used to match the rotation direction in real space.
 
-### ハード無しで動作確認する
+### Checking without hardware
 
 ```bash
 tools/make_synthetic_omni.py -o /tmp/omni.png
 tools/omni_viewer.py --source /tmp/omni.png
 ```
 
-12 個の色扇形がパノラマ上で順に並んだ縦帯になれば展開は正しい。
+If the 12 colored sectors appear as vertical bands in order on the panorama, the unwrapping is correct.
 
-## 確認したいこと（ステップ 1 のチェックリスト）
+## What to check (Step 1 checklist)
 
-1. 外周円が画像内に収まっているか（`360deg inside frame: YES`）。
-   はみ出す場合は鏡とカメラの距離を離すか、鏡を小さくする。
-2. 中心の映り込み（`r_in`）が大きすぎないか。ここは死角になる。
-3. パノラマで 360 度が途切れず連続しているか（左端と右端がつながる）。
-4. 床と物体の彩度差が **saturation** ウィンドウで見えるか。
-   見えにくい場合は `/ctrl?var=saturation&val=2`、および AWB/AEC/AGC を
-   固定（`awb=0, aec=0, agc=0`）して露出の揺れを止める。ステップ 3 では固定が前提。
+1. Does the outer circle fit inside the image (`360deg inside frame: YES`)?
+   If it spills out, increase the mirror-to-camera distance or use a smaller mirror.
+2. Is the center reflection (`r_in`) not too large? This becomes the blind zone.
+3. Is the panorama continuous over 360 degrees without gaps (left and right edges join)?
+4. Is the saturation difference between floor and objects visible in the **saturation** window?
+   If it is hard to see, use `/ctrl?var=saturation&val=2` and lock AWB/AEC/AGC
+   (`awb=0, aec=0, agc=0`) to stop exposure fluctuation. Step 3 assumes they are locked.
 
-## 撮像設定と方位の規約
+## Capture settings and bearing convention
 
-鏡を替えても効き続ける結論だけ。導出と実測値は [NOTES.md](NOTES.md) にある。
+Only the conclusions that keep holding after a mirror swap. Derivations and measured values are in [NOTES.md](NOTES.md).
 
-### ホワイトバランスは `wb_mode=1`（sunny）固定
+### White balance is fixed at `wb_mode=1` (sunny)
 
-彩度で判定する以上、白飛びより **色かぶり** の方が致命的。5 つのプリセットを実測して、
-床の彩度がいちばん中立だった sunny を初期値にした（コントラスト 10.3x、auto は 6.8x）。
+Since detection is based on saturation, **color cast** is more fatal than blown highlights. All 5 presets were measured, and
+sunny, where the floor saturation was the most neutral, was made the default (contrast 10.3x; auto was 6.8x).
 
-**`awb=0`（AWB 停止）はやってはいけない。** OV3660 では直前の自動値を保持せず既定ゲインに
-戻り、床の彩度が 21 → 62 に悪化する。プリセット固定が正しいレバー。
+**Do not use `awb=0` (AWB off).** On the OV3660 it does not hold the last automatic value but falls back to the default gains,
+and the floor saturation worsens from 21 to 62. Locking a preset is the correct lever.
 
-暗部は色相が不安定なので、彩度で判定する前に **`V>80` でゲート**する。
+Hue is unstable in dark areas, so **gate on `V>80`** before judging by saturation.
 
-### 方位は `theta0=90, ccw=true`
+### Bearing is `theta0=90, ccw=true`
 
-これで **パノラマの列角 = ROS 方位**（x 前方・CCW 正）がそのまま成り立つ。
-カメラの取り付け向きを変えていないので、鏡を替えてもこの 2 つは変わっていない。
+With this, **panorama column angle = ROS bearing** (x forward, CCW positive) holds directly.
+The camera mounting orientation has not changed, so these two have stayed the same across mirror swaps.
 
-**静止画の物体の位置合わせだけでは符号（`ccw`）は決まらない。** 既知の物体を既知の角度だけ
-動かして、像がどちらへ動くか見ること。`ccw` を間違えたまま静止画に当てはめると、
-**もっともらしい解が出てしまう**（実際に一度、誤った物体対応から中心を 13px 補正する
-誤った結論を出した）。
+**Aligning objects in a still image alone does not determine the sign (`ccw`).** Move a known object by a known angle
+and watch which way the image moves. If you fit a still image with the wrong `ccw`,
+**a plausible solution comes out anyway** (this actually happened once: a wrong object correspondence led to the wrong conclusion
+that the center needed a 13px correction).
 
-### シリアルが無いときは `/log`
+### Use `/log` when there is no serial
 
-RAM 上の 4KB リングバッファで、`logf()` がシリアルと両方に出力する。60 秒ごとに
-uptime / 電池電圧 / heap / RSSI のハートビートが入るので、バッテリー駆動時の消耗も追える。
-鏡のマウントでリセットボタンが塞がり、USB を抜くとシリアルも消える構成なので、
-これが唯一の窓口になることがある。
+A 4KB ring buffer in RAM; `logf()` writes to both serial and the buffer. A heartbeat with
+uptime / battery voltage / heap / RSSI is logged every 60 seconds, so battery drain can be tracked as well.
+Since the mirror mount blocks the reset button and unplugging USB also kills serial,
+this can be the only window into the device.
 
-## ステップ 3: 72 方向の境界検出
+## Step 3: boundary detection in 72 bearings
 
 ```bash
-# 1. 床に何も置かない状態で、無視領域マスクを作る
+# 1. With nothing on the floor, create the ignore mask
 tools/mask_editor.py --url http://<ip>:81/stream --set-framesize 8 \
-    --holder-hue 15 40 --far-radius 139   # a で自動生成 → 手で修正 → s で保存
+    --holder-hue 15 40 --far-radius 139   # a to auto-generate -> fix by hand -> s to save
 
-# 2. スキャン
+# 2. Scan
 tools/omni_range.py --url http://<ip>:81/stream --set-framesize 8
 tools/omni_range.py --source shot.png --once --json scan.json
 ```
 
-`--set-framesize` は 3 つのツール（`omni_viewer` / `mask_editor` / `omni_range`）で共通。
-**較正を書き出すツール自身に指定させること。** `mirror_calib.json` はフレームサイズを
-刻んでいてそのサイズでしか有効でないので、「較正を始めるコマンド」と「サイズを決める
-コマンド」を分けると必ずいつかずれる。
+`--set-framesize` is shared by the 3 tools (`omni_viewer` / `mask_editor` / `omni_range`).
+**Let the tool that writes the calibration set it itself.** `mirror_calib.json` records the frame size
+and is only valid at that size, so if the "command that starts calibration" and the "command that sets the size"
+are separate, they will eventually drift apart.
 
-各方向について、パノラマの列を内側（近く）から外側（遠く）へ走査し、
-床から最初に外れた半径を返す。凸面鏡では**背の高い物体は基部が最も内側**に写るので、
-外向き走査の最初のヒットがその方向の最近傍障害物になる。
+For each bearing, the panorama column is scanned from the inside (near) to the outside (far),
+and the first radius that departs from the floor is returned. In a convex mirror, **a tall object's base appears innermost**,
+so the first hit of the outward scan is the nearest obstacle in that bearing.
 
-判定は 2 つの手がかりの max を取る。彩度だけでは足りないため:
+The decision takes the max of 2 cues. Saturation alone is not enough:
 
-- **彩度**: 有彩色の物体は床の 6〜10 倍。強い手がかり。
-- **明度**: 灰色・黒の物体は彩度がほとんど動かないので、明度の乖離も見る。
+- **Saturation**: chromatic objects are 6 to 10 times the floor. The strong cue.
+- **Value**: gray and black objects barely move the saturation, so the deviation in value is also checked.
 
-しきい値は絶対値ではなく **床からの頑健な σ**（MAD ベース）。探している物体自体が
-外れ値なので、標準偏差だと物体が自分自身を隠してしまう。彩度は**上方向のみ**
-数える（床の影は彩度が下がるので、これを物体と誤検出しないため）。
+The threshold is not an absolute value but a **robust sigma from the floor** (MAD-based). The object being searched for
+is itself an outlier, so with a standard deviation the object would hide itself. Saturation counts **upward only**
+(floor shadows lower saturation, and this keeps them from being detected as objects).
 
-出力は**ソース画像上の半径（px）であって距離ではない**。半径→距離の変換は
-ステップ 4 で、既知距離のターゲットを使った鏡形状の校正が必要。
+The output is **a radius on the source image (px), not a distance**. Radius -> distance conversion is
+Step 4 and needs the mirror shape calibrated with targets at known distances.
 
-### framesize の選び方（実測）
+### Choosing the framesize (measured)
 
-2 つの制約がぶつかる。**鏡の外周がフレームに収まること**（収まらない方位は測れない）と、
-**RGB565 のキャプチャが速いこと**（これがスキャンレートを決める）。
+Two constraints collide: **the outer rim of the mirror must fit in the frame** (bearings that do not fit cannot be measured) and
+**RGB565 capture must be fast** (this sets the scan rate).
 
-`320x320` などの正方形モードは**センサの切り出し**で画角が狭く、4:3 のモードだけが全画角になる。
-これは JPEG で XGA と相関を取って確定させた（QVGA 0.995 / CIF 0.993 が全画角、HVGA は切り出し 0.856）。
+Square modes such as `320x320` are **sensor crops** with a narrow field of view; only the 4:3 modes give the full field.
+This was confirmed by correlating against XGA in JPEG (QVGA 0.995 / CIF 0.993 are full field, HVGA is a crop at 0.856).
 
-実機の `/bench?rgb=1` と、半球ステンレス鏡の外周当てはめ:
+`/bench?rgb=1` on the real device and fitting the outer rim of the stainless hemispherical mirror:
 
-| framesize | 全画角 | ms/frame | Hz | `r_out` | 使える半径 |
+| framesize | Full field | ms/frame | Hz | `r_out` | Usable radius |
 |---|---|---|---|---|---|
-| 7 = 320x320 | ✗ 切り出し | 96.0 | 10.4 | 156 | 81 px・**方位 75 度が欠測** |
-| 6 = QVGA 320x240 | ✓ | 90.0 | 11.1 | 117 | 61 px |
-| **8 = CIF 400x296** | ✓ | **112.6** | **8.9** | 146 | **76 px** |
-| 9 = HVGA 480x320 | ✗ 切り出し | 126.9 | 7.9 | — | — |
-| 10 = VGA 640x480 | ✓ | **450.2** | **2.2** | 234 | 122 px |
+| 7 = 320x320 | x crop | 96.0 | 10.4 | 156 | 81 px, **75 degrees of bearing missing** |
+| 6 = QVGA 320x240 | yes | 90.0 | 11.1 | 117 | 61 px |
+| **8 = CIF 400x296** | yes | **112.6** | **8.9** | 146 | **76 px** |
+| 9 = HVGA 480x320 | x crop | 126.9 | 7.9 | — | — |
+| 10 = VGA 640x480 | yes | **450.2** | **2.2** | 234 | 122 px |
 
-**VGA はバイト数が 3 倍なのに 4.7 倍かかる。** 450 ≒ 90×5 で、センサは 11 fps 出し続けているのに
-ドライバが 5 フレームに 1 枚しか完了できていない（PSRAM への DMA 帯域が頭打ち）。`fb_count` を
-1 に減らすと 585 ms とさらに悪化するので、設定では抜けられない。
+**VGA has 3 times the bytes but takes 4.7 times as long.** 450 is about 90x5: the sensor keeps producing 11 fps but
+the driver completes only 1 frame in 5 (DMA bandwidth into PSRAM is saturated). Reducing `fb_count`
+to 1 makes it worse at 585 ms, so there is no way out through settings.
 
-**CIF を選んだ。** 8.9 Hz を保ったまま使える半径が 320x320 とほぼ同じで、しかも方位の欠測がない。
-分解能を優先するなら VGA だが 2.2 Hz との交換になる。
+**CIF was chosen.** It keeps 8.9 Hz with almost the same usable radius as 320x320, and no bearings are missing.
+VGA if resolution is the priority, but that trades for 2.2 Hz.
 
-`--set-framesize` は `omni_viewer.py` / `mask_editor.py` / `omni_range.py` の 3 つで使える。
-enum 値はライブラリ版で動くので、**届いたフレームのサイズを期待値と突き合わせて警告する**
-ようにしてある。
+`--set-framesize` works in all 3 of `omni_viewer.py` / `mask_editor.py` / `omni_range.py`.
+Because the enum values shift with the library version, **the size of the received frame is checked against the expected one and a warning is issued**.
 
-### 床の基準は環状部の内側半分から取る
+### The floor reference is taken from the inner half of the annulus
 
-外周付近は床ではなく壁・家具・天井を見ている。それを基準統計に混ぜると
-ばらつきが膨らみ、本物の物体が埋もれる。基準を内側 50% に限定した効果:
+Near the outer rim the image shows walls, furniture, and ceiling, not floor. Mixing that into the reference statistics
+inflates the spread and buries real objects. The effect of restricting the reference to the inner 50%:
 
-| 基準範囲 | 床の彩度 MAD | 空の床の最大乖離 |
+| Reference range | Floor saturation MAD | Max deviation on an empty floor |
 |---|---|---|
-| 環状部全体 | 13.3 | **4.6σ**（誤検出する）|
-| 内側 50% | 11.9 | **2.9σ** |
-| 内側 35% | 10.4 | 2.8σ |
+| Whole annulus | 13.3 | **4.6 sigma** (false detection)|
+| Inner 50% | 11.9 | **2.9 sigma** |
+| Inner 35% | 10.4 | 2.8 sigma |
 
-これでしきい値を 4.5 → 3.0 まで下げられ、正面 5cm の青いバーの検出が
-**8 方向から 14 方向に増えた**。空の床の誤検出は 0 のまま。
-（表の数値は最初の凸面鏡での実測。結論と既定値は現行でもそのまま使っている。）
+This allowed the threshold to be lowered from 4.5 to 3.0, and detection of a blue bar 5cm ahead
+**increased from 8 bearings to 14**. False detections on an empty floor stayed at 0.
+(The numbers in the table were measured with the first convex mirror. The conclusion and defaults are still used as is in the current configuration.)
 
-**半球鏡ではこれに加えて、外側に恒久的な誤検出源がある。** 環状部の外縁（地平線の手前）は
-壁や家具を見ていて、閾値 3.0 に対してピーク 3.6〜4.4 の run を作る。`confirm`=4.0 を
-またぐので、対象側の run が 4.0 を割った瞬間だけ検出が一気に外へ飛ぶ。
-**マスクで落とすこと**（ステップ 4 の「遠端はマスクで決める」）。
+**With the hemispherical mirror there is, in addition, a permanent source of false detection on the outside.** The outer edge of the annulus (just inside the horizon)
+sees walls and furniture and produces runs peaking at 3.6 to 4.4 against the threshold of 3.0. Since these straddle
+`confirm`=4.0, the detection jumps outward the moment the target-side run dips below 4.0.
+**Mask it out** ("The far end is set by the mask" in Step 4).
 
-### しきい値は実測で決めた
+### Thresholds were set by measurement
 
-床に何も置かない画像（誤検出であるべき）と既知位置に物体を置いた画像の
-両方でスイープし、`threshold=3.0, min_run=8, val_threshold=6.0` を既定値にした。
+Sweeping both over images with nothing on the floor (where anything is a false detection) and images with objects at known positions,
+`threshold=3.0, min_run=8, val_threshold=6.0` were made the defaults.
 
-**彩度と明度でしきい値を分けているのが要点。** 明度を 6.0 から 4.5 に下げると、
-バーの検出は増えるが空の床で誤検出が 8 件出る（影が 3.0σ あるため）。
-彩度側は 3.0 まで下げても誤検出ゼロを保つ。
+**The key point is that saturation and value have separate thresholds.** Lowering the value threshold from 6.0 to 4.5
+increases bar detections but gives 8 false detections on an empty floor (shadows reach 3.0 sigma).
+The saturation side stays at zero false detections even down to 3.0.
 
-### ロボットの影はマスクしない
+### The robot's shadow is not masked
 
-実測:
+Measured:
 
-| 領域 | 彩度 S | 明度 V |
+| Region | Saturation S | Value V |
 |---|---|---|
-| 明るい床 | 13.9 | 175.1 |
-| ロボットの影 | 8.4 | 134.4 |
+| Bright floor | 13.9 | 175.1 |
+| Robot's shadow | 8.4 | 134.4 |
 
-**影は彩度をまったく動かさない（乖離 0.0σ）が、明度では 3.0σ 動く。**
-影を静的マスクに入れてはいけない——ロボットが動けば影の向きも変わるので、
-固定マスクは誤りになる。代わりに弱い手がかりである明度に別のしきい値を
-持たせた（`--val-threshold`、既定 6.0）。彩度の 4.5 より高いのはこのため。
+**The shadow does not move saturation at all (deviation 0.0 sigma) but moves value by 3.0 sigma.**
+The shadow must not go into the static mask: when the robot moves the shadow direction changes too, so
+a fixed mask would be wrong. Instead, the weaker cue, value, has its own threshold
+(`--val-threshold`, default 6.0). That is why it is higher than the saturation one at 4.5.
 
-### 無視領域はマスクで持つ
+### Ignored regions are held in a mask
 
-方向ごとの `r_in` ではなく、パノラマ座標のマスクで持つ。ケーブルのように
-複数方向を異なる半径で横切る遮蔽は 1 方向 1 半径では表現できないため。
-マスクは `a` で自動生成できる（各列を外向きに走査し、床の明度の 72% を
-超えるまでを無視領域とする）が、**床に何も置いていない状態で作ること**。
-物体があるとそれごとマスクされる。
+Not as a per-bearing `r_in`, but as a mask in panorama coordinates. An occlusion like a cable, which
+crosses multiple bearings at different radii, cannot be expressed as one radius per bearing.
+The mask can be auto-generated with `a` (each column is scanned outward, and everything up to where it exceeds
+72% of the floor value is treated as ignored), but **do it with nothing on the floor**.
+If an object is present it gets masked along with everything else.
 
-### ホルダーは色相で落とす（2026-11-01、黄色ホルダー）
+### Masking the holder by hue (2026-11-01, yellow holder)
 
-ホルダーを付けると鏡像に 3 つのものが加わる。いずれも床と同じ明るさなので、
-明度しか見ない `a` の自動生成はまるごと「使える」と判定し（97% が有効のまま）、
-次のスキャンで全部が障害物になる。そこで `--holder-hue LO HI`（OpenCV の色相 0〜179、
-黄色は `15 40`）を与えると `a` が色相でも塗る。
+Attaching the holder adds 3 things to the mirror image. All of them are as bright as the floor, so
+the value-only auto-generation with `a` judges them entirely "usable" (97% stays valid),
+and on the next scan all of them become obstacles. So when `--holder-hue LO HI` (OpenCV hue 0 to 179,
+yellow is `15 40`) is given, `a` also paints by hue.
 
-| 写るもの | 場所（較正 px） | 扱い |
+| What appears | Location (calibration px) | Treatment |
 |---|---|---|
-| レンズ周りの基部（四角） | 辺の方位で 40、角と腕の根元で 56〜64 | 列ごとに内側から最後の黄色行まで閉じる |
-| 腕 4 本 | 方位 +43〜57、+135〜141、−140〜−128、−50〜−38（90 度間隔） | 全半径を遮るので列ごと閉じる（余白 3 度）。PC 側で 7 方向、デバイス側で 12 方向が常時欠測 |
-| 外周のリング | 鏡の縁（124〜127 device px）より外 | 遠端 139 で既に落ちている |
+| Base around the lens (square) | 40 at the bearings of its sides, 56 to 64 at the corners and the roots of the arms | Per column, closed from the inside up to the last yellow row |
+| The 4 arms | Bearings +43 to 57, +135 to 141, -140 to -128, -50 to -38 (90-degree spacing) | They block all radii, so the whole column is closed (3 degrees margin). 7 bearings permanently blind on the PC side, 12 on the device side |
+| The outer ring | Outside the mirror rim (124 to 127 device px) | Already dropped by the far end at 139 |
 
-**腕の判定は絶対値ではなく床からの彩度の上昇（+15）で見る。** 光源と反対側の腕は
-彩度が 44 しかなく幅 3 度で、絶対しきい値（S≥70）では 4 本中 3 本しか拾えなかった。
+**Arms are judged by the rise in saturation above the floor (+15), not by an absolute value.** The arm on the side away from the light source
+has a saturation of only 44 and is 3 degrees wide, and an absolute threshold (S>=70) only picked up 3 of the 4.
 
-**床の基準に黄色が混ざると自己隠蔽が起きる。** 基部の四角が有効領域に残ったままだと
-床の彩度が 37〜74 に膨らみ（本当の床は 21）、しきい値が上がって腕も四角も検出から
-漏れる。「検出されたところを除外する」手順はこの状態では成り立たないので、
-マスクは色相で先に作る。
+**If yellow mixes into the floor reference, self-masking occurs.** If the square of the base stays in the valid region,
+the floor saturation inflates to 37 to 74 (the real floor is 21), the threshold rises, and both the arms and the square
+escape detection. A "exclude what was detected" procedure does not work in this state, so
+the mask is built by hue first.
 
-ホルダー装着後の実測（CIF、較正は中心だけ 2 px 以内で詰め直し、`r_out` と距離フィットは据え置き）:
-空の床で誤検出 0（USB ケーブルの映り込み +145〜+170 度を除く）。
-2 回の撮影でマスクの食い違いは 1.9%。近端は 2.2 cm → 3.6 cm に後退する。
-デバイス側（BLE、98 スキャン）も同じで、ヒットはケーブルの +155〜+170 度だけ。
+Measured after attaching the holder (CIF; only the center of the calibration re-tightened to within 2 px, `r_out` and the distance fit left as they were):
+0 false detections on an empty floor (excluding the reflection of the USB cable at +145 to +170 degrees).
+The mask discrepancy between 2 captures was 1.9%. The near end recedes from 2.2 cm to 3.6 cm.
+The device side (BLE, 98 scans) is the same, with hits only at the cable at +155 to +170 degrees.
 
-**デバイス用マスクは「方向セルの列の過半が開いているときだけ使う」に変えた**（`gen_firmware_calib.py`）。
-PC は 10 列の中央値を取るときマスク列を 0 にするので、大半がマスクの方向は何も出ないが、
-デバイスのサブレイ 5 本にはマスクが無く、中央値が腕の縁を拾う。`any` のままだと +140 度に
-5 cm の障害物がスキャンの 14% に出た。欠測が 7 → 12 方向に増えるのはこのため。
-`--far-radius 139` は遠端の帯を `a` で一緒に閉じるためのもの（ステップ 4 の表）。
+**The device mask was changed to "use only when the majority of the bearing cell's columns are open"** (`gen_firmware_calib.py`).
+The PC zeroes masked columns when taking the median of 10 columns, so a bearing that is mostly masked outputs nothing, but
+the device's 5 sub-rays have no mask and the median picks up the edge of an arm. With `any` as it was, a
+5 cm obstacle appeared at +140 degrees in 14% of scans. This is why the blind bearings grew from 7 to 12.
+`--far-radius 139` is there so that `a` closes the far-end band at the same time (table in Step 4).
 
-`r_in` は 25.6 のまま。`gen_firmware_calib.py` は 27 device px まで上げられると言うが、
-`range_fit.json` が `calib_r_in` で較正の同一性を見ているので、上げるなら距離を測り直してから。
+`r_in` stays at 25.6. `gen_firmware_calib.py` says it could be raised to 27 device px, but
+`range_fit.json` checks calibration identity through `calib_r_in`, so remeasure the distances before raising it.
 
-## ステップ 4: 半径 → 距離（完了、半球ステンレス + CIF 400x296）
+## Step 4: radius -> distance (done, stainless hemisphere + CIF 400x296)
 
 ```bash
-# 距離ごとに: 対象を鏡の軸から d cm に置き、7 フレームの中央値を記録する
+# For each distance: place the target d cm from the mirror axis and record the median of 7 frames
 tools/omni_range.py --url http://<ip>:81/stream --set-framesize 8 \
-    --record-distance 6 --record-bearing 0 --record-repeat 7   # --record-bar は直線のバーのとき
-# 全点取れたらフィット
+    --record-distance 6 --record-bearing 0 --record-repeat 7   # --record-bar when the target is a straight bar
+# Once all points are in, fit
 tools/fit_range.py --write --valid-range 4.5 21
 ```
 
-距離は**鏡の軸（= レンズ中心）から対象の手前面までの水平距離**。モデルがそう定義しているので、
-キューブの前面からではない。対象は床との彩度差が大きい有彩色の箱かバーが扱いやすい。
+Distance is **the horizontal distance from the mirror axis (= lens center) to the near face of the target**. The model defines it that way,
+so it is not from the front of the cube. A chromatic box or bar with a large saturation difference from the floor is the easiest target to handle.
 
-`r(d) = -8.31 + 115.76 * arctan(d / 7.300)`（6 点 / 4.5〜21cm、**残差 rms 0.9px、最大 1.6px**）
+`r(d) = -8.31 + 115.76 * arctan(d / 7.300)` (6 points / 4.5 to 21cm, **residual rms 0.9px, max 1.6px**)
 
-| 半径（較正 px） | 距離 | 分解能 | |
+| Radius (calibration px) | Distance | Resolution | |
 |---|---|---|---|
-| 70 | 5.9 cm | 0.10 cm/px | 実測範囲 |
-| 90 | 8.3 cm | 0.14 cm/px | 実測範囲 |
-| 110 | 11.9 cm | 0.23 cm/px | 実測範囲 |
-| 130 | 18.5 cm | 0.47 cm/px | 実測範囲 |
-| 139（マスク端） | 24.1 cm | 0.75 cm/px | 外挿 |
+| 70 | 5.9 cm | 0.10 cm/px | measured range |
+| 90 | 8.3 cm | 0.14 cm/px | measured range |
+| 110 | 11.9 cm | 0.23 cm/px | measured range |
+| 130 | 18.5 cm | 0.47 cm/px | measured range |
+| 139 (mask edge) | 24.1 cm | 0.75 cm/px | extrapolated |
 
-**LaserScan の範囲は 0.036〜0.233 m**（近端はホルダー基部の映り込みで決まる。ステップ 3 の「ホルダーは色相で落とす」）。
+**The LaserScan range is 0.036 to 0.233 m** (the near end is set by the reflection of the holder base; "Masking the holder by hue" in Step 3).
 
-### 遠端はマスクで決める、`r_out` ではない
+### The far end is set by the mask, not `r_out`
 
-半球鏡は**縁が地平線より上を見る**ので、`r_out` に対応する距離が存在しない
-（このフィットの地平線は r=173.5、`r_out` は 200）。さらに地平線の手前は
-1 px あたり数十 cm になり、数字としては出ても使えない。
+A hemispherical mirror's **rim looks above the horizon**, so there is no distance corresponding to `r_out`
+(the horizon of this fit is at r=173.5; `r_out` is 200). Moreover, just inside the horizon
+one px is tens of cm, so a number comes out but is unusable.
 
-そこで**マスクで外側の帯を落とし**、`gen_firmware_calib.py` が `range_min/max` を
-**マスクが実際に開いている半径**から算出するようにした。切る位置は許容する分解能で決める:
+So **the outer band is dropped by the mask**, and `gen_firmware_calib.py` computes `range_min/max`
+**from the radii where the mask is actually open**. Where to cut is decided by the acceptable resolution:
 
-| 許容分解能 | 遠端 | マスクを切る半径 |
+| Acceptable resolution | Far end | Radius to cut the mask |
 |---|---|---|
-| 0.50 cm/px | 19.2 cm | 132 較正 px |
-| **0.75 cm/px** | **24.1 cm** | **139 較正 px**（採用） |
-| 1.00 cm/px | 28.1 cm | 144 較正 px |
+| 0.50 cm/px | 19.2 cm | 132 calibration px |
+| **0.75 cm/px** | **24.1 cm** | **139 calibration px** (adopted) |
+| 1.00 cm/px | 28.1 cm | 144 calibration px |
 
-切らずに `r_out` まで使うと `range_max` が **1.6 m** で生成される。そこは 41 cm/px なので、
-nav2 に流せば遠方に無意味な点を撒くことになる。
+Without cutting, using all the way to `r_out`, `range_max` is generated as **1.6 m**. That region is 41 cm/px, so
+feeding it to nav2 would scatter meaningless points far away.
 
-### `r_in` は死角ではない
+### `r_in` is not the blind zone
 
-`r_in` は 100 点の半径サンプルを**どこから張るか**だけを決める。死角はマスクが持つ。
-半球鏡では自己映り込みや遮蔽が方位で 0.13〜0.45 `r_out` とばらつくので、
-1 方向 1 半径では表現できない。
+`r_in` only decides **where the 100 radius samples start**. The blind zone is held by the mask.
+With the hemispherical mirror, self-reflection and occlusion vary by bearing from 0.13 to 0.45 `r_out`, so
+one radius per bearing cannot express it.
 
-**`r_in` は「どの方向でもいちばん近くまで見える半径」に置く。** 高くすると近くまで
-見える方向が黙って潰れ、低くすると開く前のサンプルが無駄になる。
-`gen_firmware_calib.py` がマスクの開き半径を方位別に集計して、ずれていれば指摘する。
+**Put `r_in` at "the radius that can see closest in any bearing".** Set higher, the bearings that can see closer
+are silently crushed; set lower, the samples before the opening are wasted.
+`gen_firmware_calib.py` tallies the mask opening radius per bearing and points out any discrepancy.
 
-床の基準統計も同じ理由で、**各方位の「使える範囲」の内側 50%** から取る
-（半径インデックスの内側 50% ではない）。生のインデックスで切ると、死角の広い方位は
-基準サンプルがゼロになり、床モデルが一部の方位だけから作られる。
-デバイス側（`scan.cpp`）と PC 側（`omni_range.py`）の両方を同じ規則にしてある。
+For the same reason, the floor reference statistics are taken from **the inner 50% of each bearing's "usable range"**
+(not the inner 50% of the radius index). Cutting by raw index leaves bearings with a wide blind zone
+with zero reference samples, and the floor model gets built from only some bearings.
+Both the device side (`scan.cpp`) and the PC side (`omni_range.py`) follow the same rule.
 
-### 較正と測定を取り違えないための仕組み
+### Guards against mixing up calibration and measurement
 
-この工程では取り違えを 3 回やった。いずれも「もっともらしい値が出てしまう」ため
-気づきにくい。ツール側で弾くようにした。
+This stage saw 3 mix-ups. All were hard to notice because "a plausible value comes out".
+The tools now reject them.
 
-| 事故 | ガード |
+| Accident | Guard |
 |---|---|
-| VGA/XGA 用の距離フィットを 320x320 の較正で使った | `range_fit.json` に `calib_r_in`/`r_out` を記録し、不一致なら距離を出さない |
-| 320x320 の較正のまま XGA で 8 点測ってしまった | `mirror_calib.json` に `frame_width`/`height` を記録し、違う解像度のフレームは**エラーで停止** |
-| 対象がマスク境界に張り付いた値を記録した | その方向のマスク開始半径から 8px 以内なら警告 |
-| 別の鏡・別の framesize のサンプルが `range_samples.json` に混ざった | サンプルごとの `frame_width` が較正と違えば**エラーで停止**（`record_sample` は追記するので溜まる） |
-| 半径が距離に対して逆行・停滞したまま最後まで進んだ | 記録のたびに単調性を検査し、2 行未満の変化や逆行を警告 |
+| Used a distance fit for VGA/XGA with the 320x320 calibration | `range_fit.json` records `calib_r_in`/`r_out`, and no distance is output on mismatch |
+| Measured 8 points in XGA while the calibration was still 320x320 | `mirror_calib.json` records `frame_width`/`height`, and a frame of a different resolution **stops with an error** |
+| Recorded a value where the target was stuck to the mask boundary | Warns if within 8px of the mask start radius in that bearing |
+| Samples from a different mirror or framesize got mixed into `range_samples.json` | **Stops with an error** if a sample's `frame_width` differs from the calibration (`record_sample` appends, so they accumulate) |
+| Radius regressed or stalled against distance all the way to the end | Monotonicity is checked at every record; a change of less than 2 rows or a regression gives a warning |
 
-**「解像度を変えると較正は移らない」** のが要点。正方形モードは 4:3 の縮小ではなく
-センサの切り出しなので、単純なスケールでは換算できない
-（320x320 は 4:3 の中央 768x768 を切り出して縮小したもの: 実測 NCC 0.980 対 0.644）。
+**"The calibration does not carry over if you change the resolution"** is the key point. The square modes are not a downscale of 4:3 but
+a sensor crop, so a simple scale cannot convert them
+(320x320 is the central 768x768 of 4:3, cropped and downscaled: measured NCC 0.980 versus 0.644).
 
-### 測定手順（次に取り直すとき）
+### Measurement procedure (for the next remeasurement)
 
-1. **1 枚は測定にならない。** 対象を固定したまま撮っても半径は sd 2〜3 較正 px
-   ばらつき、これは 1 cm 動かして買える量とほぼ同じ。`--record-repeat 7` で
-   中央値を取る（平均でなく中央値なのは、たまに別のものに食いつくフレームを捨てるため）。
-2. 距離を変えたら、記録された半径が**単調に増える**ことをその場で確認する。
-   ツールが警告を出すが、傾きが**単調に減る**ことも見ること。圧縮的な曲線なので、
-   傾きが戻ったらその 2 区間に共通する点が疑わしい。
-3. **1 セッションで取り切る。** 機体・鏡・カメラに触れない。定規は床に固定する。
-4. 刻みは**半径が等間隔**になるように取る。距離を等間隔にすると遠側の点が
-   半径上で固まり、急峻な近側が手薄になる。3 点取ったら暫定フィットを引いて
-   残りの距離を割り直すとよい。
-5. 最初の 1 点は「動かす前に測ってしまった」になりやすい。2 点目と見比べる。
+1. **One frame is not a measurement.** Even with the target held still, the radius scatters with an sd of 2 to 3 calibration px,
+   which is about the same as what moving 1 cm buys. Take the median with `--record-repeat 7`
+   (median rather than mean, to discard the occasional frame that latches onto something else).
+2. After changing the distance, confirm on the spot that the recorded radius **increases monotonically**.
+   The tool warns, but also check that the slope **decreases monotonically**. The curve is compressive, so
+   if the slope comes back up, the point shared by those 2 intervals is suspect.
+3. **Take everything in one session.** Do not touch the robot, mirror, or camera. Fix the ruler to the floor.
+4. Space the steps so that **the radii are evenly spaced**. Equal spacing in distance clumps the far points
+   on the radius axis and leaves the steep near side thin. After 3 points, draw a provisional fit
+   and reassign the remaining distances.
+5. The first point is prone to "measured before moving". Compare it against the second.
 
-**外れ値は「合わないから」ではなく「物理的にありえないから」落とす。** 今回は
-8 cm の 1 点を除外したが、根拠は残差 5.3 px（他は最大 1.6 px）だけでなく、
-その点を入れると傾きの並びが単調でなくなること。除外した 6 点は rms 0.9 px で乗る。
-なお 8 cm は取り直しても同じ値が再現した（原因は未解明）。
+**Drop outliers because they are "physically impossible", not because they "don't fit".** This time
+the single point at 8 cm was excluded, and the reason was not only the residual of 5.3 px (others max 1.6 px) but
+that including it makes the sequence of slopes non-monotonic. The remaining 6 points sit at rms 0.9 px.
+Note that remeasuring 8 cm reproduced the same value (cause unresolved).
 
-### 半径 → 距離の割り付け
+### Assigning radii to distances
 
 ```bash
-# 3 点取ったら暫定フィットを引き、半径等間隔になる距離を逆算する
+# After 3 points, draw a provisional fit and back out the distances that give evenly spaced radii
 tools/fit_range.py --write
 python3 - <<'EOF'
 import json, numpy as np
@@ -534,363 +534,363 @@ for r in np.linspace(cal['r_in'] + 10, 139, 10):
 EOF
 ```
 
-## ステップ 5: オンデバイス処理（完了）
+## Step 5: on-device processing (done)
 
 ```bash
-tools/gen_firmware_calib.py     # 較正・マスク・フィットを C ヘッダに書き出す
-# 再較正したら必ず再実行して書き込むこと（手で写さない）
-curl http://<ip>/scan           # 72 方向を JSON で返す
+tools/gen_firmware_calib.py     # write calibration, mask, and fit into a C header
+# Always rerun and flash after recalibrating (do not copy by hand)
+curl http://<ip>/scan           # returns the 72 bearings as JSON
 ```
 
-`omni_range.py` を `firmware/.../scan.cpp` に移植した。パラメータは
-`scan_calib.h` に生成するので、PC 側と食い違わない。
+`omni_range.py` was ported to `firmware/.../scan.cpp`. The parameters are
+generated into `scan_calib.h`, so they do not diverge from the PC side.
 
-### PC 側との一致
+### Agreement with the PC side
 
-`scan_calib.h` を同じ較正から生成しているので、デバイスと PC は同じ答えを出すはず。
-中央値は RGB565 と JPEG でオフセットするが、検出は `(値−中央値)/MAD` なので相殺される。
+Since `scan_calib.h` is generated from the same calibration, the device and the PC should give the same answer.
+The median is offset between RGB565 and JPEG, but the detection is `(value - median)/MAD`, so it cancels out.
 
-**現行構成での差は 2.9 device px**（同一シーンで `/scan` が 54.5、PC が 51.6）。
-デバイスの半径サンプル刻み 1.10 px の 2.6 個ぶんで、量子化だけでは説明しきれていない。
-320x320 のころは −1.7 px まで合っていたので、**未解決の差**として残っている。
+**The difference in the current configuration is 2.9 device px** (`/scan` gives 54.5 and the PC 51.6 on the same scene).
+That is 2.6 steps of the device's radius sample spacing of 1.10 px, and quantization alone does not fully explain it.
+In the 320x320 days they agreed to within -1.7 px, so this remains an **unresolved difference**.
 
-さらに BLE 経由の連続測定は方位 0 で 8.2〜10.1 cm ばらつく（PC 側は 9 枚で
-sd 0.9 device px）。RGB565 の生ノイズと、サブレイが 5 本（PC は 10 列）である
-ことが効いていそうだが切り分けていない。
+Furthermore, continuous measurement over BLE scatters from 8.2 to 10.1 cm at bearing 0 (PC side: sd 0.9 device px over 9 frames).
+Raw RGB565 noise and the fact that there are 5 sub-rays (the PC uses 10 columns) seem to contribute,
+but this has not been isolated.
 
-突き合わせるには同一フレームが要る。測定ビルドは `/still` がヒープ不足で拒否されるので、
-**較正ビルドを一時的に焼くか、`/scan` に生サンプルを吐く経路を足す**必要がある。
+Comparing them requires the identical frame. The measurement build refuses `/still` due to lack of heap, so
+**either temporarily flash the calibration build or add a path for `/scan` to dump the raw samples**.
 
-### カメラの LED は必ず消すこと
+### The camera LED must be turned off
 
-`setup()` で「動作中」表示として LED を点灯させていたが、**鏡がそれを環状部に
-反射して、強く彩度の高い青い物体として検出される**。空の床で幻の障害物が
-3 個（強度 最大 7.9）出ていた。消すと 0/72。点け直すと同じ 3 方向が再現した。
+`setup()` used to light the LED as a "running" indicator, but **the mirror reflects it into the annulus and it is detected as a strong,
+highly saturated blue object**. On an empty floor, 3 phantom obstacles
+(strength up to 7.9) appeared. Turning it off gave 0/72. Turning it back on reproduced the same 3 bearings.
 
-`auto_mask` は暗い自己映り込みしか拾わないので、**明るい鏡面反射は自動では
-マスクされない**。LED は初期状態で消灯にした（`/ctrl?var=led&val=1` で点く）。
+`auto_mask` only picks up dark self-reflections, so **bright specular reflections are not
+masked automatically**. The LED is now off in the initial state (`/ctrl?var=led&val=1` turns it on).
 
-### 処理時間とレイテンシ
+### Processing time and latency
 
-| 段 | 時間 |
+| Stage | Time |
 |---|---|
-| capture（RGB565 CIF 400x296） | 113 ms |
-| sample（72×100×5 点） | 43 ms |
+| capture (RGB565 CIF 400x296) | 113 ms |
+| sample (72x100x5 points) | 43 ms |
 | detect | 12 ms |
-| **測定するフレームの齢** | **98 ms** |
-| publish 間隔（`scan_period` 200 ms） | 216 ms |
+| **Age of the frame being measured** | **98 ms** |
+| publish interval (`scan_period` 200 ms) | 216 ms |
 
-検出処理自体は 55 ms と軽く、律速は取得。sample と detect は解像度に依らないので、
-framesize を上げたときに増えるのは capture だけ。
+Detection itself is light at 55 ms; capture is the bottleneck. sample and detect do not depend on resolution, so
+only capture grows when the framesize is raised.
 
-**フレームの齢は測ること、推定しないこと。** `fb->timestamp` と現在時刻の差を
-スキャンタスクから 2 秒ごとにログに出している。
+**Measure the frame age, do not estimate it.** The difference between `fb->timestamp` and the current time
+is logged from the scan task every 2 seconds.
 
 ```
 latency: frame age 98 ms, publish cycle 216 ms, scan 48 ms (11 scans)
 ```
 
-#### 測定モードの `fb_count` は 1
+#### `fb_count` is 1 in measurement mode
 
-`fb_count=2` だとドライバが両方のバッファを埋めて止まり、タスクが `scan_period` を
-寝て起きたときに渡されるのは**古い方**になる。実測:
+With `fb_count=2`, the driver fills both buffers and stops, and when the task wakes after sleeping `scan_period`
+it is handed **the older one**. Measured:
 
-| `fb_count` | フレームの齢 |
+| `fb_count` | Frame age |
 |---|---|
-| 2 | 234〜300 ms |
-| **1** | **90〜101 ms** |
+| 2 | 234 to 300 ms |
+| **1** | **90 to 101 ms** |
 
-1 にするとキューが存在しないので、`esp_camera_fb_get()` は直前に完了したキャプチャしか
-返せない。capture がスキャンの 48 ms と重ならなくなる代わりに、`scan_period` が
-どのみち捨てていたスループットなので実害はない（4.1 Hz は変わらない）。
-ソースにある「32% のスキャンが同じフレームの再処理だった」という重複スキップは、
-`fb_count=1` では起きなくなる。
+With 1 there is no queue, so `esp_camera_fb_get()` can only return the capture that completed most recently.
+Capture no longer overlaps the 48 ms scan, but `scan_period` was throwing that
+throughput away anyway, so there is no practical loss (4.1 Hz is unchanged).
+The duplicate skip in the source ("32% of scans were reprocessing the same frame")
+no longer triggers with `fb_count=1`.
 
-#### 時計を間違えるとレイテンシを測ったつもりで時計のドリフトを測る
+#### Use the wrong clock and you measure clock drift while thinking you measure latency
 
-esp32-camera は `fb->timestamp` を **`esp_timer_get_time()`** で打っている。これを
-`gettimeofday()` と比べると、RTC 系と APB 系のドリフトがレイテンシに化ける。
-実際に **730 ms** と出て、再書き込み後に **555 ms** に「改善」した——単に uptime が
-リセットされてドリフトの累積が減っただけだった。同じ時計で比べたら 98 ms。
+esp32-camera stamps `fb->timestamp` with **`esp_timer_get_time()`**. Compare that against
+`gettimeofday()` and the drift between the RTC and APB clocks masquerades as latency.
+It actually read **730 ms**, and "improved" to **555 ms** after reflashing — only because the uptime
+was reset and less drift had accumulated. Compared on the same clock, it is 98 ms.
 
-### BLE 出力（動作確認済み）
+### BLE output (verified)
 
 ```bash
-tools/ble_client.py --seconds 15        # 距離だけを受信
-curl "http://<ip>/radio?wifi=0"         # WiFi を止めて BLE 単独にする
+tools/ble_client.py --seconds 15        # receive distances only
+curl "http://<ip>/radio?wifi=0"         # stop WiFi and run BLE alone
 ```
 
-実測: **69 スキャン / 17.1 秒 = 4.0 Hz、取りこぼし 0、606 B/s**。
-同じ結果を JPEG ストリームで得ていたときは約 200 kB/s だったので **330 分の 1**。
+Measured: **69 scans / 17.1 seconds = 4.0 Hz, 0 dropped packets, 606 B/s**.
+Getting the same result over the JPEG stream took about 200 kB/s, so this is **1/330 of that**.
 
-パケットは 150 バイト（magic, version, n_rays, seq, `u16 dist_mm[72]`、
-0xFFFF = 検出なし）。方位はレイ i が i×5 度で、そのまま ROS 方位。
+The packet is 150 bytes (magic, version, n_rays, seq, `u16 dist_mm[72]`,
+0xFFFF = no detection). The bearing of ray i is i x 5 degrees, which is directly the ROS bearing.
 
-**NimBLE を使うこと。** Bluedroid はカメラ + WiFi と同居するとヒープが足りず、
-`BLEDevice::init()` から戻ってこない。NimBLE で Flash 58%→42%、RAM 32%→30%。
-さらに **1.4.x は arduino-esp32 2.x 向け**で、3.x では `NimBLEDevice::init()` が
-`abort()` する。2.x 系を使う（`setScanResponse` は `enableScanResponse` に改名）。
+**Use NimBLE.** Bluedroid does not have enough heap when it coexists with the camera + WiFi, and
+`BLEDevice::init()` never returns. With NimBLE, Flash went 58%->42% and RAM 32%->30%.
+Also, **1.4.x targets arduino-esp32 2.x**; on 3.x, `NimBLEDevice::init()`
+calls `abort()`. Use the 2.x series (`setScanResponse` was renamed to `enableScanResponse`).
 
-**スキャンタスクのスタックは 8 kB 必要。** `scan_frame` はヒストグラム 2 kB +
-1 kB をスタックに置いており、4 kB のタスクでは BLE 接続の初回でチップごと
-リセットした（HTTP 経由では httpd のスタックを 8 kB にしていたので露見しなかった）。
-ヒストグラムは static に移した。
+**The scan task needs an 8 kB stack.** `scan_frame` put a 2 kB histogram +
+1 kB on the stack, and with a 4 kB task the whole chip reset on the first BLE
+connection (over HTTP this did not surface because the httpd stack had been set to 8 kB).
+The histogram was moved to static.
 
-### 消費電力の実測
+### Measured power consumption
 
-放電を測るには USB を抜く必要があり、そうすると serial も充電も止まる。
-WiFi も止めるので **残る窓口は BLE だけ**。バッテリー電圧と uptime は
-スキャンパケットに同梱してある（別のキャラクタリスティックにはしない
-——BlueZ の GATT キャッシュが古いままだと新しい属性が見えず、原因追跡に
-時間を取られた）。
+Measuring discharge requires unplugging USB, which also stops serial and charging.
+WiFi is stopped too, so **BLE is the only remaining window**. Battery voltage and uptime are
+bundled into the scan packet (not a separate characteristic
+— with a stale BlueZ GATT cache the new attribute is invisible, and tracking that down
+cost time).
 
 ```bash
-curl "http://<ip>/radio?wifi=0"          # WiFi 停止（USB を抜く前に）
-# ここで USB ケーブルを抜く
+curl "http://<ip>/radio?wifi=0"          # stop WiFi (before unplugging USB)
+# unplug the USB cable here
 tools/ble_client.py --seconds 1800 --battery calib/discharge_ble.csv --battery-period 60
 tools/analyse_discharge.py calib/discharge_ble.csv
 ```
 
-**実測（BLE 単独、スキャン 11.6 Hz）:**
+**Measured (BLE alone, scanning at 11.6 Hz):**
 
-| 項目 | 値 |
+| Item | Value |
 |---|---|
-| 放電 | **413 mV/h** |
-| 電圧帯 | 4133 → 3961 mV（0.42 h） |
-| 推定稼働 | **約 1.9 時間**（4.2→3.4 V） |
+| Discharge | **413 mV/h** |
+| Voltage band | 4133 -> 3961 mV (0.42 h) |
+| Estimated runtime | **about 1.9 hours** (4.2->3.4 V) |
 
-`/radio?wifi=0` は実行時のみで、再起動すると WiFi は戻る。ウォッチドッグは
-意図的に止めた場合は再起動しない。
+`/radio?wifi=0` is runtime only; WiFi comes back on reboot. The watchdog does not
+reboot when it was stopped intentionally.
 
-**WiFi を止めると BLE のスループットが上がる**（4.0 → 11.3 Hz）。同一ラジオの
-時分割がそのまま効いている。
+**Stopping WiFi raises BLE throughput** (4.0 -> 11.3 Hz). The time-sharing of the
+single radio shows up directly.
 
-### 起動時は BLE のみ（既定）
+### BLE only at boot (default)
 
-`wifi_config.h` の `START_WIFI_AT_BOOT 0`（既定）で、**電源投入時は BLE だけ**が
-立ち上がる。WiFi が消費の主因で、計測が本体で完結する以上は不要なため。
+With `START_WIFI_AT_BOOT 0` (default) in `wifi_config.h`, **only BLE comes up at power-on**.
+WiFi is the main consumer, and since measurement is completed on the device it is not needed.
 
-較正やデバッグで HTTP が要るときは BLE から起こす:
+When HTTP is needed for calibration or debugging, bring it up from BLE:
 
 ```bash
-tools/ble_client.py --cmd wifi-on     # WiFi + HTTP サーバが立ち上がる
+tools/ble_client.py --cmd wifi-on     # WiFi + HTTP server come up
 ```
 
-**HTTP サーバは WiFi より先に起動してはいけない。** `httpd_start()` はソケットを
-作るので、ネットワークスタックが初期化されていないと FreeRTOS 内部で
-`xQueueSemaphoreTake` の assert に落ちてブートループする。`server_start()` は
-`wifi_start()` の後でだけ呼ぶこと（二重起動もガードしてある）。
+**The HTTP server must not start before WiFi.** `httpd_start()` creates sockets,
+so if the network stack is not initialized it hits an
+`xQueueSemaphoreTake` assert inside FreeRTOS and boot-loops. Call `server_start()`
+only after `wifi_start()` (double starting is guarded too).
 
-### 電源断・再起動（リセットボタンが塞がる前提）
+### Power-off and reboot (assuming the reset button is blocked)
 
-鏡のマウントでリセットボタンが押せなくなるので、BLE と HTTP の両方から
-再起動と電源断ができるようにした。
+Since the mirror mount makes the reset button unreachable, reboot and power-off
+are available from both BLE and HTTP.
 
 ```bash
-tools/ble_client.py --cmd reboot                    # 再起動
-tools/ble_client.py --cmd off                       # 電源断（バッテリー時のみ）
+tools/ble_client.py --cmd reboot                    # reboot
+tools/ble_client.py --cmd off                       # power off (battery only)
 tools/ble_client.py --cmd scan-period --scan-period 500
-curl "http://<ip>/power?reboot=1"                   # WiFi があるとき
+curl "http://<ip>/power?reboot=1"                   # when WiFi is available
 curl "http://<ip>/power?off=1"
 ```
 
-**電源断は GPIO33 の LDO ホールドを解除する方式**なので、**USB を挿していると
-切れない**（レールが USB から給電され続ける）。その場合はログに
-`still alive: USB is powering the rail` が出る。
+**Power-off works by releasing the LDO hold on GPIO33**, so **it does not cut off while USB is plugged in**
+(the rail keeps being powered from USB). In that case the log shows
+`still alive: USB is powering the rail`.
 
-コマンドは**スキャン特性への書き込み**で受ける。専用のキャラクタリスティックを
-足したときに BlueZ の古い GATT キャッシュのせいで見えず、キャッシュ削除も
-権限の都合で効かなかったため、確実に動く経路に寄せた。
+Commands are received as **writes to the scan characteristic**. When a dedicated characteristic
+was added it was invisible because of BlueZ's stale GATT cache, and clearing the cache did not work
+due to permissions, so it was moved to a path that reliably works.
 
-**再起動すると WiFi が戻り、`scan_period` も既定値（200ms）に戻る。**
-恒久的に変えるならファームの既定値を変更すること。
+**On reboot, WiFi comes back and `scan_period` also returns to its default (200ms).**
+To change it permanently, change the default in the firmware.
 
-### スキャン頻度が消費電力の主要な調整点
+### Scan frequency is the main knob for power consumption
 
-スキャン 1 回が CPU 約 52 ms。センサは約 11 fps 出すので、放っておくと
-コアがほぼ埋まる。`scan_period`（既定 200 ms = 5 Hz）で間引ける。
+One scan is about 52 ms of CPU. The sensor produces about 11 fps, so left alone
+the core is nearly saturated. `scan_period` (default 200 ms = 5 Hz) thins it out.
 
 ```bash
-curl "http://<ip>/ctrl?var=scan_period&val=200"   # 0 = 上限なし
+curl "http://<ip>/ctrl?var=scan_period&val=200"   # 0 = no cap
 ```
 
-測距範囲 23 cm に対し 5 Hz なら、20 cm/s で走っても障害物を 5 回見られる。
-速く走らせるなら上げる。
+With a 23 cm range at 5 Hz, an obstacle is seen 5 times even when driving at 20 cm/s.
+Raise it if you drive faster.
 
-**重複フレームの除去は空振りだった。** ベンチの 7.9 fps と実際の 11.6 Hz を
-比べて「32% は同じフレームの再処理」と推測したが、タイムスタンプで判定を
-入れても レートは 11.0 Hz のまま——重複はほぼ無かった。推測を実測と
-取り違えた例。判定自体は害がないので残してある。
+**Duplicate frame removal was a miss.** Comparing the bench's 7.9 fps with the actual 11.6 Hz,
+it was guessed that "32% is reprocessing of the same frame", but adding a timestamp check
+left the rate at 11.0 Hz — there were almost no duplicates. An example of mistaking a guess for a
+measurement. The check itself is harmless, so it stays.
 
-## ステップ 6: ROS 2 への出力（実機確認済み）
+## Step 6: output to ROS 2 (verified on real hardware)
 
-`ros2/toio_omni_range` が BLE のスキャンを `sensor_msgs/LaserScan` として流す。
-**LaserScan にすることが要点**で、そうすれば RViz・コストマップ・スキャン
-マッチングが、このセンサについて何も知らないまま動く。
+`ros2/toio_omni_range` publishes the BLE scans as `sensor_msgs/LaserScan`.
+**Making it a LaserScan is the key point**: RViz, costmaps, and scan matching
+then work without knowing anything about this sensor.
 
 ```bash
-docker/build-docker-image.bash            # 初回のみ
+docker/build-docker-image.bash            # first time only
 docker/run-docker-container.bash
-# コンテナ内
+# inside the container
 colcon build --symlink-install && source install/setup.bash
 ros2 launch toio_omni_range omni_range.launch.py
 ros2 launch toio_omni_range omni_range.launch.py device_address:=AA:BB:CC:DD:EE:FF
 ```
 
-| topic | 型 | 内容 |
+| topic | Type | Content |
 |---|---|---|
-| `scan` | `sensor_msgs/LaserScan` | 72 方向、5 度刻み |
-| `omni/battery` | `sensor_msgs/BatteryState` | vbat（残量は未フィットなので NaN）|
-| `/diagnostics` | `DiagnosticArray` | レート・欠落・再接続・レンジ外の数 |
+| `scan` | `sensor_msgs/LaserScan` | 72 bearings, 5-degree steps |
+| `omni/battery` | `sensor_msgs/BatteryState` | vbat (percentage is NaN since it is not fitted)|
+| `/diagnostics` | `DiagnosticArray` | Rate, gaps, reconnects, out-of-range counts |
 
-回転式 LiDAR と違う点が 2 つある。
+There are 2 differences from a spinning LiDAR.
 
-- **スキャンは 1 枚のカメラフレームのスナップショット**。72 本が同時刻なので
-  走査中の歪みが無く、`time_increment` は 0。
-- **届くのは約 23 cm、近側 3.6 cm は死角**。`range_min` / `range_max` はファームと同じ較正から
-  `gen_firmware_calib.py` が `params/omni_range_calib.yaml` に生成する
-  （0.036〜0.233 m）。**手で書かないこと** — 鏡と食い違った LaserScan は、
-  下流が黙って全点を捨てる。
+- **A scan is a snapshot of one camera frame.** All 72 rays share the same instant, so
+  there is no distortion during the sweep and `time_increment` is 0.
+- **It reaches about 23 cm, and the near 3.6 cm is a blind zone.** `range_min` / `range_max` are generated by
+  `gen_firmware_calib.py` into `params/omni_range_calib.yaml` from the same calibration as the firmware
+  (0.036 to 0.233 m). **Do not write them by hand** — a LaserScan that disagrees with the mirror
+  makes downstream silently discard every point.
 
-### nav2 で動かす
+### Running with nav2
 
-キューブと一緒に上げる手順は [ros2/toio_omni_bringup/README.md](ros2/toio_omni_bringup/README.md) に、
-地図作成は [ros2/toio_omni_mapping/README.md](ros2/toio_omni_mapping/README.md) にある。要点だけ:
+The procedure for bringing it up together with the cube is in [ros2/toio_omni_bringup/README.md](ros2/toio_omni_bringup/README.md), and
+map building in [ros2/toio_omni_mapping/README.md](ros2/toio_omni_mapping/README.md). Just the essentials:
 
 ```bash
-# コンテナ内（toio_ros2 が同じワークスペースにあること）
+# inside the container (toio_ros2 must be in the same workspace)
 ros2 launch toio_omni_bringup toio_omni_bringup.launch.py \
-    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # キューブ + センサ + RViz
+    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # cube + sensor + RViz
 ros2 launch toio_omni_mapping mapping.launch.py \
-    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # マットを走って地図を作る
+    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # drive around the mat and build a map
 ros2 launch toio_omni_bringup toio_omni_nav2.launch.py \
-    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # nav2。RViz の 2D Goal Pose で目標
+    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # nav2. Set the goal with 2D Goal Pose in RViz
 ```
 
-- **`cube_id` と `device_address` は両方指定する。** キューブとセンサが同じ BLE アダプタを
-  使うので、発見スキャンを走らせると同居する接続が不安定になる。
-- 2 つのドライバは互いを知らず、TF（`map → center → omni_link`）でだけ出会う。
-  鏡の位置は `sensor_x/y/z/yaw` で、`sensor_yaw=0`（センサの 0 度 = キューブ正面）は検証済み。
-- 指令は `controller_server → cmd_vel_raw → collision_monitor → cmd_vel → toio_ros2`。
-  `goal_pose` は `cube_goal_pose` に逃がしてある（キューブ内蔵の目標移動は `cmd_vel` を
-  通らず、nav2 と競合するため）。
-- 壁は**彩度のある色**で、鏡より高くすること。白い床に白い壁は映らない。
-- **トップヘビーなので速度は倒れないことで決めている。** nav2 は 0.03 m/s・2.0 rad/s、
-  キューブ内蔵の目標移動は `goal_max_speed:=15`、teleop は `-p speed:=0.03 -p turn:=1.8`。
-  nav2 既定の Behavior Tree はリカバリで 0.30 m を 0.15 m/s でバックするので、BackUp を 3 cm・0.025 m/s に
-  変えた BT をパッケージ内に持っている。どれか 1 つだけ下げても倒れる
-  （bringup の README「トップヘビーなので速度は安定性で決まる」）。
+- **Specify both `cube_id` and `device_address`.** The cube and the sensor use the same BLE adapter,
+  so running a discovery scan destabilizes the connections sharing it.
+- The 2 drivers know nothing of each other and only meet through TF (`map -> center -> omni_link`).
+  The mirror position is `sensor_x/y/z/yaw`, and `sensor_yaw=0` (sensor 0 degrees = cube front) has been verified.
+- Commands flow `controller_server -> cmd_vel_raw -> collision_monitor -> cmd_vel -> toio_ros2`.
+  `goal_pose` is diverted to `cube_goal_pose` (the cube's built-in target motion does not go through `cmd_vel`
+  and conflicts with nav2).
+- Walls must be **a saturated color** and taller than the mirror. A white wall on a white floor does not show.
+- **Top-heavy, so speeds are set by not falling over.** nav2 uses 0.03 m/s and 2.0 rad/s,
+  the cube's built-in target motion `goal_max_speed:=15`, teleop `-p speed:=0.03 -p turn:=1.8`.
+  nav2's default Behavior Tree backs up 0.30 m at 0.15 m/s during recovery, so the package carries a BT
+  with BackUp changed to 3 cm at 0.025 m/s. Lowering only one of these still tips it over
+  ("Top-heavy: speed is set by stability" in the bringup README).
 
-### 配列の並べ替えが要る
+### The array needs reordering
 
-`bearing(i) = ((i*5 + 180) mod 360) - 180` なので、ワイヤ上の順序は方位に対して
-単調でない（ray 36 が −180 度）。LaserScan は方位昇順を要求するため、
-ドライバは `omni_protocol.BEARING_ORDER` で並べ替える。
+Since `bearing(i) = ((i*5 + 180) mod 360) - 180`, the wire order is not monotonic in bearing
+(ray 36 is -180 degrees). LaserScan requires ascending bearing, so
+the driver reorders with `omni_protocol.BEARING_ORDER`.
 
-**ここを間違えると 180 度回ったスキャンが「それらしく」表示される。** 定数の
-ローテート量を書かず、方位から並べ替えを導いているのはそのため。
-`test_omni_protocol.py` が並べ替えと角度の対応を検証している。
+**Get this wrong and a scan rotated by 180 degrees is displayed "plausibly".** That is why
+no constant rotation amount is written and the reordering is derived from the bearings.
+`test_omni_protocol.py` verifies the correspondence between the reordering and the angles.
 
-### BLE アダプタの取り合い
+### Contention for the BLE adapter
 
-toio キューブ（toio-py → bleak）とセンサ（bleak）が同じ HCI を使う。接続の
-発見スキャンが同居する接続を不安定にするので、**一度見つけたアドレスを
-`device_address` に固定してスキャンを避ける**こと。ノードは起動時に見つけた
-アドレスをログに出す。それでも足りなければ `ble_adapter:=hci1` でドングルを分ける。
+The toio cube (toio-py -> bleak) and the sensor (bleak) use the same HCI. A discovery scan
+for connecting destabilizes the connections sharing it, so **pin the address once found
+in `device_address` and avoid scanning**. The node logs the address it found at startup.
+If that is still not enough, split onto a dongle with `ble_adapter:=hci1`.
 
-### `BleakClient(timeout=)` は接続タイムアウトではない
+### `BleakClient(timeout=)` is not a connection timeout
 
-bleak の `BleakClient(address, timeout=...)` は、**アドレス指定時の暗黙 discover**
-にかかるだけで、`connect()` 自体は BlueZ 上で無期限に待つ。前回の接続が
-きれいに切れていないとユニットは advertising を止めるので、そこで
-**エラーもログも出さずに永久にハングする**。
+bleak's `BleakClient(address, timeout=...)` only applies to the **implicit discover when an address is given**;
+`connect()` itself waits indefinitely on BlueZ. If the previous connection did not
+close cleanly the unit stops advertising, and at that point it
+**hangs forever with no error and no log**.
 
-`asyncio.wait_for(client.connect(), timeout=...)` で必ず包むこと。
-`toio_ros2` も同じ罠を踏んで直している。
+Always wrap it in `asyncio.wait_for(client.connect(), timeout=...)`.
+`toio_ros2` hit the same trap and fixed it.
 
-これが厄介なのは**下流での見え方**で、スキャンが来ないだけなので
-nav2 の collision_monitor が「センサ死亡」と判断してロボットを止め、
-「nav2 が指令を出していない」ようにしか見えなくなる。
+What makes this nasty is **how it looks downstream**: scans simply stop arriving, so
+nav2's collision_monitor decides "sensor dead" and halts the robot, and
+all you see is "nav2 is not issuing commands".
 
-### 未確認のこと
+### Unverified
 
-nav2 で障害物を避けて走るところまでは確認した（冒頭の動画。鏡ホルダー以前の構成）。
-ホルダー付きの現行構成での nav2 走行と、**接続・再接続・スキャン欠落の挙動は未計測**。
-`nav2_params.yaml` の `obstacle_max_range` などは現行の 0.233 m に合わせて書き換えたが、
-その値で走らせてはいない。
+Driving around obstacles under nav2 has been verified (the video at the top; the configuration before the mirror holder).
+nav2 driving in the current configuration with the holder, and **the behavior of connection, reconnection, and scan dropouts, have not been measured**.
+`obstacle_max_range` etc. in `nav2_params.yaml` were rewritten to match the current 0.233 m, but
+it has not been driven with those values.
 
-残っている既知の差:
+Remaining known discrepancies:
 
-- **デバイスと PC で 2.9 device px ずれる。** 同じシーンで `/scan` が 54.5、
-  PC の `omni_range.py` が 51.6。デバイスの半径サンプル間隔 1.10 px の 2.6 個ぶん。
-- **BLE 経由の連続測定は方位 0 で 8.2〜10.1 cm ばらつく**（PC 側は 9 枚で sd 0.9 device px）。
-  RGB565 の生ノイズと、サブレイが 5 本（PC は 10 列）であることが効いていそうだが未切り分け。
-- **較正の 8 cm だけが曲線から 5.3 px 外れる。** 取り直しても再現する。原因不明。
+- **Device and PC differ by 2.9 device px.** On the same scene `/scan` gives 54.5 and
+  the PC's `omni_range.py` 51.6. That is 2.6 steps of the device's radius sample spacing of 1.10 px.
+- **Continuous measurement over BLE scatters from 8.2 to 10.1 cm at bearing 0** (PC side: sd 0.9 device px over 9 frames).
+  Raw RGB565 noise and the 5 sub-rays (the PC uses 10 columns) seem to contribute, but this has not been isolated.
+- **Only the 8 cm calibration point is off the curve by 5.3 px.** Reproduces on remeasurement. Cause unknown.
 
-## ハマりどころ（実機で踏んだもの）
+## Pitfalls (all hit on real hardware)
 
-- **`/still` と `/scan` は 1 リクエスト分古いフレームを返していた。** `grab_mode` が
-  `CAMERA_GRAB_WHEN_EMPTY` で、バッファを返した瞬間にドライバが次を撮って埋めるため、
-  次の単発リクエストが受け取るのは「前回のリクエスト時に撮られたフレーム」になる。
-  ストリームはフレームが流れ続けるので気づかない。**較正中はこれが「既知の距離」と
-  「ひとつ前の対象位置の半径」を静かに組にする。** 実際に 5 cm と 6 cm のフレームが
-  10 cm と 11 cm 相当の像になっていて、原因究明に何セッションも溶かした。
-  `camera_fb_get_fresh()` で `fb_count` 枚捨ててから取るようにして解決
-  （framesize を変えた直後に単発 `/still` を叩いて、要求どおりのサイズが返るかで検証できる）。
-  PC 側も同じ性質があるので、`first_frame_at()` が期待サイズのフレームが来るまで捨てる。
+- **`/still` and `/scan` were returning a frame one request old.** With `grab_mode` set to
+  `CAMERA_GRAB_WHEN_EMPTY`, the driver captures the next frame and fills the buffer the moment it is returned,
+  so the next one-shot request receives "the frame captured at the time of the previous request".
+  The stream keeps frames flowing, so you do not notice. **During calibration this silently pairs the "known distance"
+  with "the radius of the previous target position".** Frames at 5 cm and 6 cm actually
+  had images equivalent to 10 cm and 11 cm, and finding the cause burned several sessions.
+  Fixed by discarding `fb_count` frames before grabbing in `camera_fb_get_fresh()`
+  (can be verified by hitting a one-shot `/still` right after changing framesize and checking that the requested size comes back).
+  The PC side has the same property, so `first_frame_at()` discards until a frame of the expected size arrives.
 
-- **書き込みボーレート**：Timer Camera F の FT232 は stub flasher 起動後に
-  460800 / 230400 へ切り替えると応答しなくなる（`The chip stopped responding`）。
-  `upload_speed = 115200` で安定（1MB で約 60 秒）。
-- **`framesize` の enum 値はバージョン依存**。arduino-esp32 3.3.7 同梱の esp32-camera では
-  `FRAMESIZE_VGA = 10`（古い版は 8）。`sensor.h` を確認すること。
-- **フレームバッファは `esp_camera_init` 時のサイズで確保される**ので、
-  `set_framesize` で初期化サイズより大きくはできない。UXGA で初期化してから
-  VGA に落としている。
-- `/still` は変更直後 2〜3 枚は古いバッファを返す。解像度変更後は数枚捨てる。
-- `CAMERA_GRAB_LATEST` はクライアント不在でも撮り続けて `cam_hal: FB-OVF` を
-  出し続けるので `CAMERA_GRAB_WHEN_EMPTY` にしている。
-- USB で M5Stack のどのデバイスか分からないとき：`0403:6001 / Hades2001 / M5stack`
-  という FTDI として見える。**抜き差しして `stat -c %y /sys/bus/usb/devices/<n-m>`
-  の更新を見る**のが確実。
-- **pyserial でポートを開くとデバイスがリセットされる。** DTR/RTS が既定で
-  アサートされ、M5Stack の自動リセット回路が働く。開いた直後に
-  `setDTR(False)/setRTS(False)` を明示しないと、リセット保持状態のまま
-  「WiFi が死んだ」ように見える（一度これで誤診した）。
-- **`esp_http_server` のハンドラでローカル配列を大きく取らない。** タスクスタックは
-  既定 4096 バイトで、4KB のローカルバッファでリクエストがハングする。
-  `config.stack_size` を上げるか static にする。
+- **Flashing baud rate**: the Timer Camera F's FT232 stops responding when switched to
+  460800 / 230400 after the stub flasher starts (`The chip stopped responding`).
+  `upload_speed = 115200` is stable (about 60 seconds for 1MB).
+- **The `framesize` enum values depend on the version.** In the esp32-camera bundled with arduino-esp32 3.3.7,
+  `FRAMESIZE_VGA = 10` (older versions: 8). Check `sensor.h`.
+- **The frame buffer is allocated at the size given to `esp_camera_init`**, so
+  `set_framesize` cannot go larger than the initialization size. It initializes at UXGA and then
+  drops to VGA.
+- `/still` returns the old buffer for 2 or 3 frames right after a change. Discard a few frames after changing resolution.
+- `CAMERA_GRAB_LATEST` keeps capturing even with no client and keeps printing `cam_hal: FB-OVF`,
+  so `CAMERA_GRAB_WHEN_EMPTY` is used.
+- When you cannot tell which M5Stack device is which over USB: it shows up as an FTDI
+  `0403:6001 / Hades2001 / M5stack`. **Replug it and watch for the update in `stat -c %y /sys/bus/usb/devices/<n-m>`**;
+  that is the reliable way.
+- **Opening the port with pyserial resets the device.** DTR/RTS are asserted by default and
+  the M5Stack's auto-reset circuit kicks in. Unless you explicitly call
+  `setDTR(False)/setRTS(False)` right after opening, it stays held in reset and
+  looks as if "WiFi died" (misdiagnosed once because of this).
+- **Do not take large local arrays in `esp_http_server` handlers.** The task stack
+  defaults to 4096 bytes, and a 4KB local buffer hangs the request.
+  Raise `config.stack_size` or make it static.
 
-## 既知の制約
+## Known limitations
 
-- ESP32（無印）なので VGA・JPEG quality 12 で約 10.5 fps（12 kB/frame, 126 kB/s、
-  softAP 経由で実測）。解像度を上げると落ちる。
-- **RGB565 は VGA で頭打ち**（450 ms/frame = 2.2 Hz）。測定に CIF を選んでいる理由。
-- **カメラ・WiFi・BLE は 3 つ同時に載らない。** どの 2 つでも載る。カメラ + WiFi の
-  状態で NimBLE を起こすと `ESP_ERR_NO_MEM` で abort してブートループする。
-  また WiFi を上げると内部ヒープが約 15 kB まで落ち、`esp_camera_init()` が
-  **サイズ・フォーマットを問わず失敗する**（JPEG VGA を `fb_count=1` まで削っても不可）。
-  そのため較正ビルド（`START_WIFI_AT_BOOT 1`）は起動時から JPEG + WiFi で BLE を上げず、
-  モード切り替えも一切しない。`camera_set_mode()` はヒープが足りなければ
-  **deinit する前に断る**（切り替え失敗が動いていたモードを道連れにしないため）。
-- 電池駆動時は消費が大きい。全周センサとして常用するなら USB 給電を推奨。
-- **重心が高い。** 32 mm のキューブに鏡まで載せるので、急発進・急停止・その場旋回で倒れる。
-  走行速度は 3 cm/s 程度に抑えてある（`toio_omni_bringup`）。デッドバンドのため motor 値 8 未満の
-  発進はできず、それが最小の衝撃になる。
-- 展開の半径 → 距離の対応は鏡の形状に依存する。ステップ 4 で既知距離のターゲットを
-  使って校正する。**半球鏡は縁が地平線より上を見る**ので、環状部の外側は距離を持たない。
+- Being a plain ESP32, it does about 10.5 fps at VGA with JPEG quality 12 (12 kB/frame, 126 kB/s,
+  measured over softAP). It drops as the resolution goes up.
+- **RGB565 tops out at VGA** (450 ms/frame = 2.2 Hz). This is why CIF is chosen for measurement.
+- **Camera, WiFi, and BLE cannot all three run at once.** Any 2 can. Bringing up NimBLE
+  with camera + WiFi running aborts with `ESP_ERR_NO_MEM` and boot-loops.
+  Also, bringing up WiFi drops the internal heap to about 15 kB and `esp_camera_init()`
+  **fails regardless of size or format** (even JPEG VGA cut down to `fb_count=1` does not work).
+  So the calibration build (`START_WIFI_AT_BOOT 1`) runs JPEG + WiFi from boot without bringing up BLE,
+  and does no mode switching at all. `camera_set_mode()` **refuses before deinit** if there is not enough heap
+  (so that a failed switch does not take down the mode that was running).
+- Consumption is high on battery. For regular use as an omnidirectional sensor, USB power is recommended.
+- **The center of gravity is high.** With the mirror stacked on a 32 mm cube, it falls over on hard starts, hard stops, and turning in place.
+  The driving speed is kept to about 3 cm/s (`toio_omni_bringup`). Because of the deadband, it cannot start with a motor value below 8,
+  and that is the minimum jolt.
+- The radius -> distance mapping of the unwrapping depends on the mirror shape. Calibrate with targets at known distances
+  in Step 4. **A hemispherical mirror's rim looks above the horizon**, so the outside of the annulus has no distance.
 
-## 検証済み環境・実測値
+## Verified environment and measured values
 
 - PlatformIO Core 6.2.0 / espressif32 (pioarduino) 55.3.37 / Arduino ESP32 3.3.7
-  → Flash 42.6% (1,340,953 / 3,145,728 B), RAM 31.5%（2026-11-01、測定ビルド）
-- 実機: ESP32-D0WDQ6-V3 rev3.1 / Flash 4MB / PSRAM 4MB / MAC 3c:8a:1f:d7:84:4c
-- 動作確認済み: `/` `/still` `/status` `/ctrl` `/stream` `/scan` `/bench` `/radio` `/power`、
-  framesize 切り替え（QVGA / 320x320 / CIF / HVGA / VGA / XGA / UXGA）、
-  ストリーム再接続、BLE スキャン配信、ROS 2 の LaserScan → RViz
-- 鏡: uxcell ステンレス製中空半球 約 60 mm（凸面鏡 → 円錐 → 半球と 3 回替えている。
-  円錐を諦めた経緯は下記）
+  -> Flash 42.6% (1,340,953 / 3,145,728 B), RAM 31.5% (2026-11-01, measurement build)
+- Hardware: ESP32-D0WDQ6-V3 rev3.1 / Flash 4MB / PSRAM 4MB / MAC 3c:8a:1f:d7:84:4c
+- Verified working: `/` `/still` `/status` `/ctrl` `/stream` `/scan` `/bench` `/radio` `/power`,
+  framesize switching (QVGA / 320x320 / CIF / HVGA / VGA / XGA / UXGA),
+  stream reconnection, BLE scan delivery, ROS 2 LaserScan -> RViz
+- Mirror: uxcell stainless-steel hollow hemisphere, about 60 mm (replaced three times: convex mirror -> cone -> hemisphere.
+  Why the cone was abandoned is described below)
 
-## ライセンス
+## License
 
-Apache License 2.0（[LICENSE](LICENSE)）。同居させる `toio_ros2` と揃えてある。
+Apache License 2.0 ([LICENSE](LICENSE)). Aligned with `toio_ros2`, which it lives alongside.

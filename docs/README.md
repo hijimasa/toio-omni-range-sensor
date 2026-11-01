@@ -1,35 +1,40 @@
-# docs — 概要スライド
+[English](README.md) | [日本語](README.ja.md)
 
-このセンサを 1 枚で説明するためのスライドの**生成スクリプト**。**簡易版**（文字が
-大きく、数値は最小限）と**詳細版**（実測値・処理の内訳まで載せたもの）の 2 種類。
+# docs — overview slides
 
-**生成物（pptx / pdf / png / figs\*.png）はリポジトリに置いていない。** すべて下の
-コマンドで作り直せるうえ、鏡や較正を変えるたびに古くなるため。実際、最初の凸面鏡の
-ころの版が「測れる距離 4〜11 cm」のまま残っていた。
+**Generation scripts** for slides that explain this sensor on a single page. Two variants:
+the **simple version** (large text, minimal numbers) and the **detailed version** (with
+measured values and a breakdown of the processing).
 
-| ファイル | 内容 |
+**The generated files (pptx / pdf / png / figs\*.png) are not kept in the repository.** They
+can all be rebuilt with the commands below, and they go stale every time the mirror or the
+calibration changes. In fact, a version from the first convex-mirror days was still sitting
+around saying "measurable range 4 to 11 cm".
+
+| File | Contents |
 |---|---|
-| `make_simple.py` | 簡易版。図とスライドを一括生成 |
-| `make_figs.py` | 詳細版の図（`figs/hw.png` 構成図、`figs/unwrap.png` 環状→パノラマ、`figs/scan.png` 出力） |
-| `make_slide.py` | 詳細版のスライド。`make_figs.py` の後に実行する |
+| `make_simple.py` | Simple version. Generates figures and slides in one go |
+| `make_figs.py` | Figures for the detailed version (`figs/hw.png` hardware layout, `figs/unwrap.png` ring to panorama, `figs/scan.png` output) |
+| `make_slide.py` | Slides for the detailed version. Run after `make_figs.py` |
 
-## 作り直す
+## Rebuild
 
 ```bash
 cd docs
 python3 make_simple.py            # figs/*_simple.png + toio_omni_range_simple.pptx
-python3 make_figs.py && python3 make_slide.py   # 詳細版
+python3 make_figs.py && python3 make_slide.py   # detailed version
 ```
 
-必要なもの: `matplotlib`、`python-pptx`、日本語フォント。
+Requirements: `matplotlib`, `python-pptx`, a Japanese font.
 
-## 数値を直す
+## Fixing the numbers
 
-スライドには測距範囲・レート・処理時間が**べた書き**されている。再較正したら
-リポジトリ直下の README の「現在の構成」と突き合わせて、以下を直すこと。
+The range, rate and processing time are **hard-coded** in the slides. After recalibrating,
+check them against "Current configuration" in the README at the repository root and fix the
+following.
 
-| 場所 | 内容 |
+| Location | Contents |
 |---|---|
-| `make_slide.py` の `specs` | 測距範囲・Hz・1 スキャンの処理時間・バッテリ駆動時間 |
-| `make_simple.py` の `tiles` | 測れる距離 |
-| `make_simple.py` / `make_figs.py` の `set_yticklabels` | 出力図の半径目盛 |
+| `specs` in `make_slide.py` | Range, Hz, processing time per scan, battery life |
+| `tiles` in `make_simple.py` | Measurable range |
+| `set_yticklabels` in `make_simple.py` / `make_figs.py` | Radius ticks on the output figures |

@@ -1,188 +1,198 @@
+[English](README.md) | [日本語](README.ja.md)
+
 # toio_omni_mapping
 
-マットを走り回って地図を自動生成する。姿勢は Position ID なので、
-**これは SLAM ではなく「既知姿勢での占有格子作成」**。
+Drives around the mat and builds a map automatically. The pose comes from the Position ID, so
+**this is not SLAM but "occupancy grid building with known poses"**.
 
 ```bash
 ros2 launch toio_omni_mapping mapping.launch.py \
     cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF
-# "coverage complete" が出たら（コンテナを抜ける前に！）
+# once "coverage complete" appears (before leaving the container!)
 ros2 run nav2_map_server map_saver_cli \
     -f src/toio-omni-range-sensor/ros2/toio_omni_bringup/map/arena \
     --ros-args -p save_map_timeout:=5.0
 ```
 
-**保存先はマウントされた `src/` の中にすること。** コンテナのワークスペース
-ルートはマウントされておらず `--rm` で起動するので、作業ディレクトリに
-書いた地図は Ctrl-C と同時に消える。
+**Save inside the mounted `src/`.** The container's workspace root is not mounted
+and the container is started with `--rm`, so a map written to the working directory
+vanishes the moment you press Ctrl-C.
 
-RViz の Map 表示に、走行に合わせて地図が育つのが見える。
+In the RViz Map display you can watch the map grow as the cube drives.
 
-## なぜ slam_toolbox を使わないか
+## Why not slam_toolbox
 
-Position ID は絶対値でドリフトしない。SLAM の難所である**スキャンマッチングと
-閉ループは不要なだけでなく、入れると結果が悪くなる**。23 cm・72 本のスキャンを
-渡されたマッチャにできることは少なく、その出力は**既に正しい姿勢への補正**に
-なってしまう。パラメータが全部メートル系なのも別問題として効く。
+The Position ID is absolute and does not drift. **Scan matching and loop closure, the hard
+parts of SLAM, are not only unnecessary; adding them makes the result worse.** A matcher
+handed a 23 cm, 72-beam scan can do little, and its output becomes a **correction to a pose
+that was already correct**. That all its parameters are in meter scale is a separate problem
+that also bites.
 
-## 物理的な準備
+## Physical setup
 
-**壁が無いと何も映らない。** `make_mat_map.py` が描く外周は仮想の壁
-（マット外で Position ID を失うから計画上の壁にしただけ）で、センサには
-見えない。裸のマットでは全レイが `inf` になり、地図は「空きだけ」になる。
+**Without walls nothing shows up.** The outline drawn by `make_mat_map.py` is a virtual wall
+(it is only a planning wall, because the Position ID is lost off the mat) and the sensor
+cannot see it. On a bare mat every ray is `inf` and the map is "free space only".
 
-**壁は彩度のある色にすること。** このセンサは床との彩度差で判定している
-（実測で床の 6〜10 倍）。白い床に白い壁は映らない。青系が確実。
+**Walls must be a saturated color.** This sensor discriminates by the saturation difference
+from the floor (measured at 6 to 10 times the floor). A white wall on a white floor does not
+show up. Blue tones are reliable.
 
-**高さ**は鏡（床から約 2.6 cm 以上）より高くする。
+**Height** must exceed the mirror (about 2.6 cm or more above the floor).
 
-### 見え方のジオメトリ
+### Visibility geometry
 
-A4 マット 0.297 × 0.210、`range_max` = 0.1108 m で計算すると:
+For an A4 mat 0.297 × 0.210 with `range_max` = 0.1108 m:
 
-| 位置 | 最寄りの壁 | |
+| Position | Nearest wall | |
 |---|---|---|
-| 中央 | 長辺まで 0.105 m | **かろうじて見える**（余裕 5 mm、分解能は最悪の 0.067 cm/px）|
-| 中央 | 短辺まで 0.1485 m | 見えない |
+| Center | 0.105 m to the long edge | **Barely visible** (5 mm margin, worst-case resolution 0.067 cm/px)|
+| Center | 0.1485 m to the short edge | Not visible |
 
-外周に壁を立てれば「どこにいても最低 1 枚は見える」は成立する。ただし
-**中央では平行な 2 枚しか見えず、壁に沿った方向は拘束されない**。測位の
-評価に使うなら:
+With walls along the perimeter, "at least one wall is visible from anywhere" holds. However,
+**at the center only two parallel walls are visible, and the direction along the wall is
+unconstrained**. If you use this to evaluate localization:
 
-- **非対称な柱を 1〜2 本置く**（回転対称も壊れて大域的初期化が可能になる）
-- または **20×20 cm 程度に縮める**（全域で複数の壁が見える）
+- **Place one or two asymmetric pillars** (this also breaks the rotational symmetry and makes global initialization possible)
+- or **shrink to about 20×20 cm** (multiple walls visible everywhere)
 
-## 止まってから測る
+## Stop, then measure
 
-**「止まっている」は速度ではなく変位で判定している。** Position ID は
-1 単位 ≈ 1.4 mm、通知間隔は約 40 ms なので、1 単位のちらつきを微分すると
-0.035 m/s になる。速度しきい値だと**完全に静止していても全スキャンが
-「移動中」で捨てられる**。0.3 秒の窓で 3 mm 以内なら静止とみなす。
+**"Stationary" is decided by displacement, not velocity.** One Position ID unit is about
+1.4 mm and the notification interval is about 40 ms, so differentiating a one-unit flicker
+gives 0.035 m/s. With a velocity threshold, **every scan is discarded as "moving" even when
+the cube is completely still**. Within 3 mm over a 0.3 s window counts as stationary.
 
-オフラインで確認した挙動:
+Behavior verified offline:
 
-| | 静止と判定される割合 |
+| | Fraction judged stationary |
 |---|---|
-| 静止・±1 単位のちらつき | 100% |
-| 静止・±2 単位 | 44%（1.5 秒の停止で 3 スキャン、実用上は足りる）|
-| 0.03 m/s で走行中 | 2% |
-| 0.01 m/s で微速 | 62%（この速度なら BLE 遅延の誤差 0.5 mm でセル以下、無害）|
+| Still, ±1 unit flicker | 100% |
+| Still, ±2 units | 44% (3 scans per 1.5 s stop, enough in practice)|
+| Driving at 0.03 m/s | 2% |
+| Creeping at 0.01 m/s | 62% (at this speed the BLE-latency error of 0.5 mm is below a cell, harmless)|
 
-**キューブが止まると Position ID の通知も止まる。** 沈黙は「不明」ではなく
-「静止」として扱う（`pose_timeout`）。これを入れないと最後の速度推定値が
-凍結して、二度と積分されなくなる。
+**When the cube stops, Position ID notifications stop too.** Silence is treated as
+"stationary", not "unknown" (`pose_timeout`). Without this the last velocity estimate
+freezes and nothing is ever integrated again.
 
-### TF は最新を引く。スタンプでは引かない
+### TF is looked up at latest, not at the stamp
 
-スキャンのスタンプは BLE 到着時刻で、カメラのフレームより数十 ms 遅く、
-かつ**最新の TF より新しい**ことが多い。スタンプで引くと tf2 に未来への
-外挿を要求することになり、全スキャンが落ちる。
+A scan's stamp is the BLE arrival time, tens of ms later than the camera frame, and
+usually **newer than the latest TF**. Looking up by stamp asks tf2 to extrapolate into the
+future, and every scan is dropped.
 
-停止中しか積分しないので、最新の TF が撮影時の TF と等しい。
-`TransformListener` は `spin_thread=True`（そうしないと待機中に
-バッファが更新されず、timeout が意味を持たない）。
+Since we integrate only while stopped, the latest TF equals the TF at capture time.
+`TransformListener` uses `spin_thread=True` (otherwise the buffer is not updated while
+waiting and the timeout is meaningless).
 
-`stationary_only`（既定 true）で**停止中のスキャンだけを積分する**。
-BLE 遅延をモデル化するのではなく消している。coverage 走行がどのみち各点で
-止まるので損はしない。teleop で地図を作るときも、動かしっぱなしにせず
-止まって待つこと。
+`stationary_only` (default true) **integrates only scans taken while stopped**. The BLE
+latency is eliminated rather than modeled. The coverage drive stops at every point anyway,
+so nothing is lost. When building a map with teleop too, stop and wait instead of keeping
+the cube moving.
 
-## 先に: マット params が物理マットと一致しているか
+## First: do the mat params match the physical mat
 
-`toio_ros2` は `field_width_meter` / `field_height_meter` で Position ID を
-メートルに換算する。**ここがずれていると、姿勢も地図も走行範囲も全部ずれる。**
-このパッケージの launch がマット寸法を params から読んでいるのはそのためで、
-**launch 側だけ数値を書き換えても直らない**（換算は `toio_ros2` がやる）。
+`toio_ros2` converts the Position ID to meters with `field_width_meter` /
+`field_height_meter`. **If these are off, the pose, the map and the driving range are all
+off.** That is why this package's launch reads the mat dimensions from the params, and
+**changing the numbers on the launch side alone does not fix it** (the conversion is done
+by `toio_ros2`).
 
-確認: 定規でキューブを正確に 10 cm 動かし、`/toio/pose` の差を見る。
+Check: move the cube exactly 10 cm with a ruler and look at the difference in `/toio/pose`.
 
 ```bash
 ros2 topic echo /toio/pose --field pose.position
 ```
 
-10 cm でなければ params が違う。Position ID は 1 単位 ≈ 1.4 mm なので、
-A4（0.21 × 0.297 m）なら ID スパンは 149 × 210 単位程度になるはず。
-`toio_ros2` 同梱の A4 params は 304 × 216 単位に 0.297 × 0.210 m を
-割り当てており、**この二つは両立しない**（304 単位 ≈ 0.43 m）。
-自分のマットに合う params ファイルを作って `params_file:=` で渡すこと。
+If it is not 10 cm, the params are wrong. One Position ID unit is about 1.4 mm, so on A4
+(0.21 × 0.297 m) the ID span should be roughly 149 × 210 units. The A4 params bundled with
+`toio_ros2` assign 0.297 × 0.210 m to 304 × 216 units, and **the two are incompatible**
+(304 units ≈ 0.43 m). Make a params file that matches your mat and pass it with
+`params_file:=`.
 
-## coverage 走行
+## Coverage drive
 
-`cube_goal_pose` に往復パターンを流すだけ。これはキューブ内蔵の
-`motor_control_target` に降りるので、**マットが閉ループをハードウェアで
-閉じており、nav2 は要らない**（地図を作る前なので使えない）。
+It just streams a back-and-forth pattern to `cube_goal_pose`. This goes down to the cube's
+built-in `motor_control_target`, so **the mat closes the loop in hardware and nav2 is not
+needed** (it could not be used anyway, since the map does not exist yet).
 
-**この指令は `cmd_vel` を通らないので collision_monitor では止まらない。**
-`motor_control_target` は Position ID の閉ループで、目標に着くか
-タイムアウトするまで押し続ける——邪魔なものは押しのける。だから監視は
-このノード自身がやる。進行方向 ±25 度に `stop_distance`（既定 5 cm）より
-近いものがあれば、`cmd_vel` を publish してモータを取り戻し（**通常の
-モータ指令は目標移動を上書きする**）、少し後退してその waypoint を諦める。
+**These commands do not pass through `cmd_vel`, so the collision_monitor cannot stop them.**
+`motor_control_target` is a closed loop on the Position ID and keeps pushing until it
+reaches the target or times out, shoving anything in the way aside. So this node does the
+monitoring itself. If anything within ±25 degrees of the heading is closer than
+`stop_distance` (default 5 cm), it publishes `cmd_vel` to take the motors back (**a normal
+motor command overrides the target motion**), backs up a little and gives up on that
+waypoint.
 
-後退のあと `settle_time` 待つのは、`cmd_vel` が途切れたときに `toio_ros2` が
-停止指令を 1 回送るため。それが届く前に次の目標を出すと、停止の方が
-後から効いて目標移動が取り消される。
+The `settle_time` wait after backing up is there because `toio_ros2` sends a single stop
+command when `cmd_vel` goes quiet. If the next target is issued before that arrives, the stop
+takes effect later and cancels the target motion.
 
-**センサが全方位なので、その場回転は一切不要**。カバレッジは並進だけで済む。
+**Since the sensor is omnidirectional, no in-place rotation is needed at all.** Coverage is
+done with translation only.
 
-| パラメータ | 既定 | |
+| Parameter | Default | |
 |---|---|---|
-| `row_spacing` | 0.05 | 走査線の間隔 |
-| `inset` | 0.035 | マット端からの余裕。端では Position ID が読めない |
-| `stop_distance` | 0.05 | この距離に物があれば waypoint を諦める |
-| `dwell_time` | 1.5 | 各点での停止時間。`stationary_only` と対 |
-| `goal_timeout` | 25.0 | 到達しなくても次へ進む |
+| `row_spacing` | 0.05 | Spacing between scan lines |
+| `inset` | 0.035 | Margin from the mat edge. The Position ID cannot be read at the edge |
+| `stop_distance` | 0.05 | Give up on the waypoint if something is within this distance |
+| `dwell_time` | 1.5 | Stop time at each point. Pairs with `stationary_only` |
+| `goal_timeout` | 25.0 | Move on even if the goal is not reached |
 
-到達判定は `toio/pose` の監視。`toio_ros2` はモータ応答をログには出すが
-トピックには出さないので、購読できるものが無い。
+The arrival check watches `toio/pose`. `toio_ros2` logs the motor response but does not
+publish it on a topic, so there is nothing to subscribe to.
 
-**`inset` は `stop_distance` より内側にできない。** 壁より近い waypoint は
-中止圏の内側にあり、原理的に到達できない（毎回、接近中に諦める）。
-壁がマット端にあると行末がちょうどそれになるので、`_plan()` が
-`stop_distance + edge_clearance` まで自動で押し広げ、ログに出す。
-センサは 23 cm 届くので、離れていても壁は見える。
+**`inset` cannot be smaller than `stop_distance`.** A waypoint closer than that to a wall is
+inside the abort radius and can never be reached in principle (it is abandoned on every
+approach). When the walls are at the mat edge, the row ends are exactly that, so `_plan()`
+automatically widens it to `stop_distance + edge_clearance` and logs it. The sensor reaches
+23 cm, so the wall is still visible from farther away.
 
-開始は最初の `/toio/pose` を待つ。**接続前に投げた目標は捨てられる**ので、
-固定の待ち時間では BLE スキャンに 20 秒かかった日に 1 本目を取りこぼす。
+Start waits for the first `/toio/pose`. **Goals sent before the connection are dropped**, so
+with a fixed wait the first one is lost on a day when the BLE scan takes 20 s.
 
-`use_coverage_drive:=false` で teleop 地図作成に切り替わる。
+`use_coverage_drive:=false` switches to teleop map building.
 
-## 出来た地図を nav2 / AMCL で使うとき
+## Using the resulting map with nav2 / AMCL
 
-### センサにマットの境界は見えない
+### The sensor cannot see the mat boundary
 
-これが一番効く。マットは床に置いた紙で、端に彩度の段差が無い。**センサから
-見ればマットの外も同じ「床＝空き」**なので、実測地図はマット外まで空きとして
-広がる（実測で四方に最大 4.3 cm、144 cm² ぶん）。
+This matters most. The mat is a sheet of paper on the floor, with no saturation step at its
+edge. **To the sensor, outside the mat is the same "floor = free"**, so the measured map
+extends as free space beyond the mat (measured up to 4.3 cm on each side, 144 cm² worth).
 
-その地図で nav2 を走らせると**プランナがマット外に経路を引く**。出た瞬間に
-Position ID を失って姿勢が凍結する。衝突より悪い、誰も報告しない壊れ方。
+Run nav2 on that map and **the planner routes paths off the mat**. The moment the cube
+leaves, it loses the Position ID and the pose freezes. Worse than a collision, and a failure
+mode nobody reports.
 
 ```bash
-python3 tools/clip_map_to_mat.py --map map/arena.yaml    # toio_omni_bringup 側
+python3 tools/clip_map_to_mat.py --map map/arena.yaml    # on the toio_omni_bringup side
 ```
 
-マット矩形の外を壁にした `arena_clipped.yaml` を出す。マット内の測定値は
-そのまま。**これは計画用の地図であって測位用ではない**（センサが決して
-観測しない壁を主張しているので、AMCL には無加工の方を使う）。
+This outputs `arena_clipped.yaml` with everything outside the mat rectangle turned into
+wall. Measurements inside the mat are left as is. **This is a map for planning, not for
+localization** (it asserts walls the sensor never observes, so use the unmodified one for
+AMCL).
 
-**`track_unknown_space: true`**（`nav2_params.yaml` で設定済み）。実測マップには
-unknown が残る（壁の裏、行けなかった隅）。`false` だと空き扱いになる。
+**`track_unknown_space: true`** (already set in `nav2_params.yaml`). The measured map keeps
+unknown cells (behind walls, corners that could not be reached). With `false` they are
+treated as free.
 
-そして測位の評価に使う場合、**地図は同じセンサで作ったもの**である点に
-注意。センサの系統誤差が地図と観測の両方に入るので、AMCL の誤差は
-絶対値としては楽観的に出る。手法どうしの比較には同一条件なので問題ない。
+And when using it to evaluate localization, note that **the map was built with the same
+sensor**. The sensor's systematic error enters both the map and the observations, so AMCL's
+error comes out optimistic in absolute terms. For comparing methods against each other the
+conditions are identical, so this is not a problem.
 
-## 検証状況
+## Verification status
 
-実機で一巡し、**格子の 91% が既知、`without a transform` はゼロ**まで確認済み
-（A3 折りマット、12 waypoint、約 1 分）。
+One full run on real hardware has confirmed **91% of the grid known, zero
+`without a transform`** (A3 folded mat, 12 waypoints, about 1 minute).
 
-`grid.py`（ray casting と log-odds）は ROS 無しで単体テスト済み。端点の扱い、
-壁を両側から見て同じセルに落ちること、外れたレイが反対側に回り込まないこと
-を確認している。静止判定のしきい値も、Position ID の量子化ノイズを入れた
-オフラインの掃引で決めた（上表）。
+`grid.py` (ray casting and log-odds) is unit-tested without ROS. It checks endpoint
+handling, that a wall seen from both sides lands in the same cell, and that a miss ray does
+not wrap around to the opposite side. The stationary-check threshold was also chosen by an
+offline sweep with Position ID quantization noise added (table above).
 
-未確認: 出来上がった地図が**実際の壁の位置と合っているか**。ここまでの
-不具合はすべて「もっともらしく間違う」種類だったので、地図もその前提で
-見ること。
+Not verified: whether the finished map **matches the actual wall positions**. Every defect
+so far has been of the "plausibly wrong" kind, so view the map with that assumption too.

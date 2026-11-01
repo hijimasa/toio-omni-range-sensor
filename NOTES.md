@@ -1,150 +1,156 @@
-# NOTES — 経緯と、いまは効いていない実測
+[English](NOTES.md) | [日本語](NOTES.ja.md)
 
-README は現行構成（半球ステンレス鏡 + CIF 400x296）の説明に絞ってある。
-ここには**そこへ至るまでの実測と、採用しなかった案の記録**を置く。数字の多くは
-前の鏡・前の解像度のものなので、そのまま現行には当てはまらない。捨てていないのは、
-同じ検討を一からやり直さないため。
+# NOTES — History, and measurements that no longer apply
 
-## 実機での測定結果（2026-08-08、**最初の凸面鏡**）
+The README is limited to describing the current configuration (hemispherical stainless-steel
+mirror + CIF 400x296). This file holds **the measurements that led there and the record of
+options not adopted**. Most of the numbers are from the previous mirror and the previous
+resolution, so they do not apply directly to the current setup. They are kept so the same
+investigation does not have to be redone from scratch.
 
-> この節の数字は 1 枚目の凸面鏡・VGA 較正のもの。鏡は半球ステンレスに替わっているので
-> 幾何の値（`cx` など）は現行ではない。彩度・ホワイトバランス・映り込みについての
-> 結論はそのまま通用する。
+## Measurements on the real device (2026-08-08, **first convex mirror**)
+
+> The numbers in this section are from the first convex mirror and the VGA calibration. The
+> mirror has since been replaced with the hemispherical stainless-steel one, so the geometry
+> values (`cx` etc.) are not current. The conclusions about saturation, white balance and
+> reflections still hold.
 
 
-キャリブレーション（VGA 画素）: `cx=263, cy=240, r_in=70, r_out=200`。
-外周円は画面内に完全に収まっており、**カバレッジ 100%**。
+Calibration (VGA px): `cx=263, cy=240, r_in=70, r_out=200`.
+The outer circle fits entirely within the frame, **coverage 100%**.
 
-床（無地・白）を基準に、青い箱と乾電池を置いて撮影した結果:
+Shots taken with a plain white floor as reference, with a blue box and a dry-cell battery placed on it:
 
-校正確定後、`wb_mode=1` / ROS 方位で測り直した結果:
+Re-measured after the calibration was finalized, with `wb_mode=1` / ROS bearings:
 
-| 対象 | 方位 | 彩度 S 最大 | 物体部の S 平均 | 物体部の V 平均 | 画素数 |
+| Target | Bearing | Max saturation S | Mean S over object | Mean V over object | Pixels |
 |---|---|---|---|---|---|
-| 床（基準） | — | 67 | 61 | 176 | 45 |
-| 青いピンセット | −90 度 | 114 | 79.3 | 125.2 | 1162 |
-| 青い乾電池 | +75 度 | **123** | 80.8 | **150.7** | **153** |
+| Floor (reference) | — | 67 | 61 | 176 | 45 |
+| Blue tweezers | −90° | 114 | 79.3 | 125.2 | 1162 |
+| Blue battery | +75° | **123** | 80.8 | **150.7** | **153** |
 
-**彩度は床の約 2 倍出ており、小さい物体でも彩度自体は落ちない。**
-乾電池の彩度が低く見えたのは影のせいではなく、**方位の対応を間違えて
-別の（何も無い）セクタを測っていた**ため。実際は明度もピンセットより高い。
+**Saturation comes out at roughly 2x the floor, and saturation itself does not drop for small objects.**
+The battery's saturation looked low not because of shadow but because **the bearing mapping
+was wrong and a different (empty) sector was being measured**. In fact its value (brightness)
+is also higher than the tweezers'.
 
-効くのは彩度の値ではなく **面積**。乾電池は環状部の半径 18〜26%、
-16px × 15 列 = 153 画素しかない（ピンセットは 1162 画素）。
-遠方・小型の物体ほど画素が減るので、ステップ 3 の閾値処理では
-**小面積の検出を切り捨てないこと**。
+What matters is not the saturation value but **area**. The battery occupies only 18–26% of the
+annulus radius, 16px × 15 columns = 153 pixels (the tweezers: 1162 pixels).
+Distant and small objects have fewer pixels, so the thresholding in step 3
+**must not discard small-area detections**.
 
-### カメラ自身の映り込み（死角）
+### Reflection of the camera itself (blind zone)
 
-中心から外向きに走査して、映り込みが終わる半径を 72 方向すべてで測る。
-**閾値は画像ごとの床の明度からの相対値にすること**（固定値だと露出が変わった
-だけで「悪化した」ように見える。実際に一度それで誤読した）。
+Scan outward from the center and measure the radius where the reflection ends, in all 72 directions.
+**The threshold must be relative to the floor value (brightness) of each image** (with a fixed
+value, a mere change in exposure looks like a "regression". This was actually misread once).
 
-USB ケーブルを外してバッテリー駆動にした前後:
+Before and after unplugging the USB cable and switching to battery power:
 
-| | 中央値 | 最悪 | >40% の方向 |
+| | Median | Worst | Directions >40% |
 |---|---|---|---|
-| USB ケーブルあり | 26% | 86% | 23/72 |
-| バッテリー駆動 | **24%** | **58%** | **9/72** |
+| With USB cable | 26% | 86% | 23/72 |
+| Battery powered | **24%** | **58%** | **9/72** |
 
-**有意に変化した 14 方向すべてが改善**（悪化ゼロ）。改善は +45〜+115 度に
-集中していて、そこがケーブルの写り込んでいた範囲。
+**All 14 directions that changed significantly improved** (zero regressions). The improvement is
+concentrated in +45 to +115°, which is where the cable was reflected.
 
-ただし最悪方向はまだ半径の 58% を占める。現在の `r_in=70`（= `r_out` の 35%）は
-**方向によっては小さすぎる**。ステップ 3 では `r_in` を定数にせず、
-**72 方向ぶんの内側半径プロファイルを一度測って持つ**のが正しい。
+However, the worst direction still takes up 58% of the radius. The current `r_in=70` (= 35% of `r_out`) is
+**too small in some directions**. In step 3, do not make `r_in` a constant;
+the right approach is to **measure an inner-radius profile for all 72 directions once and keep it**.
 
-### バッテリー駆動
+### Battery operation
 
-USB を抜いても再起動せず、WiFi も維持される（ping ロス 0%、RSSI -40）。
-`/log` のハートビートで消耗を追える。実測（VGA 待機、ストリームなし）:
+Unplugging USB does not cause a reboot, and WiFi is maintained (ping loss 0%, RSSI -40).
+Drain can be tracked with the `/log` heartbeat. Measured (VGA idle, no stream):
 
 ```
-up    180s  vbat 4.20 V     <- ここまで USB 給電
-up    240s  vbat 4.12 V     <- USB を抜いた
+up    180s  vbat 4.20 V     <- USB powered up to here
+up    240s  vbat 4.12 V     <- USB unplugged
 up    360s  vbat 4.09 V
 ```
 
-### 方位の校正（完了）
+### Bearing calibration (done)
 
-`cx=263, cy=240, r_in=70, r_out=200, theta0=90, ccw=true`（VGA 画素）。
-これで **パノラマの列角 = ROS 方位**（x 前方・CCW 正）がそのまま成り立つ。
+`cx=263, cy=240, r_in=70, r_out=200, theta0=90, ccw=true` (VGA px).
+With this, **panorama column angle = ROS bearing** (x forward, CCW positive) holds directly.
 
-幾何の値は 1 枚目の鏡のものだが、**`theta0=90, ccw=true` は現行でもそのまま**
-（カメラの取り付け向きが変わっていないため）。下の「動かして確かめる」手順は
-鏡を替えるたびに必要。
+The geometry values are for the first mirror, but **`theta0=90, ccw=true` still apply as is**
+(the camera mounting orientation has not changed). The "move it and check" procedure below is
+needed every time the mirror is replaced.
 
-**静止画の物体の位置合わせだけでは符号（`ccw`）は決まらない。**
-既知の物体を既知の角度だけ動かして、像がどちらへ動くか見るのが確実。
-ピンセットを 0 度 → −90 度 に移動させて確定した:
+**Aligning object positions in a still image alone does not determine the sign (`ccw`).**
+The reliable way is to move a known object by a known angle and see which way the image moves.
+Settled by moving the tweezers from 0° → −90°:
 
-| 物体 | 真値 | 検出 | 残差 |
+| Object | Ground truth | Detected | Residual |
 |---|---|---|---|
-| ピンセット（移動前） | 0 度 | −3.0 度 | 3.0 度 |
-| 乾電池 | +75 度 | +74.8 度 | 0.2 度 |
-| ピンセット（移動後） | −90 度 | −90.0 度 | 0.0 度 |
+| Tweezers (before move) | 0° | −3.0° | 3.0° |
+| Battery | +75° | +74.8° | 0.2° |
+| Tweezers (after move) | −90° | −90.0° | 0.0° |
 
-`ccw=false` を仮定すると同じデータで残差が最大 170 度になる。つまり
-**符号を間違えたまま静止画に当てはめると、もっともらしい解が出てしまう**
-（実際に一度、誤った物体対応から中心を 13px 補正する誤った結論を出した）。
-検証は必ず「動かして確かめる」こと。
+Assuming `ccw=false`, the same data gives residuals of up to 170°. In other words,
+**fitting a still image with the wrong sign yields a plausible-looking solution**
+(this actually happened once: a wrong object correspondence led to the wrong conclusion that the center should be corrected by 13px).
+Always verify by "moving it and checking".
 
-### ホワイトバランス（重要）
+### White balance (important)
 
-彩度で判定する以上、白飛びより **色かぶり** の方が致命的。実測:
+Since detection is based on saturation, **color cast** is more fatal than blown-out highlights. Measured:
 
-| wb_mode | 床の彩度 | 床の色相 | 物体の彩度 | コントラスト |
+| wb_mode | Floor saturation | Floor hue | Object saturation | Contrast |
 |---|---|---|---|---|
-| auto | 18.8 | 226 度 | 128 | 6.8x |
-| **1 = sunny** | **11.1** | 206 度 | 114 | **10.3x** |
-| 2 = cloudy | 13.1 | 60 度 | 105 | 8.0x |
-| 3 = office | 52.7 | 214 度 | 137 | 2.6x |
-| 4 = home | 89.4 | 212 度 | 156 | 1.7x |
+| auto | 18.8 | 226° | 128 | 6.8x |
+| **1 = sunny** | **11.1** | 206° | 114 | **10.3x** |
+| 2 = cloudy | 13.1 | 60° | 105 | 8.0x |
+| 3 = office | 52.7 | 214° | 137 | 2.6x |
+| 4 = home | 89.4 | 212° | 156 | 1.7x |
 
-`wb_mode=1` を初期値にした。**`awb=0`（AWB 停止）はやってはいけない** ——
-OV3660 では直前の自動値を保持せず既定ゲインに戻り、床の彩度が 21 → 62 に悪化する。
+`wb_mode=1` was made the default. **Never use `awb=0` (AWB off)** ——
+on the OV3660 it does not hold the last automatic value but reverts to the default gains, and floor saturation worsens from 21 → 62.
 
-照明を落として影を消すのは正しい。auto WB のまま暗くすると青かぶりで
-かえって悪化する（床の色相 158 度 → 222 度）が、sunny 固定なら
-強い照明 + auto（5.9x）より良い（10.3x）。
+Dimming the lighting to eliminate shadows is correct. Dimming with auto WB makes things worse
+due to a blue cast (floor hue 158° → 222°), but with sunny fixed it is
+better (10.3x) than strong lighting + auto (5.9x).
 
-暗部は色相が不安定なので、彩度で判定する前に **`V>80` でゲート**すること。
+Hue is unstable in dark regions, so **gate on `V>80`** before judging by saturation.
 
-## USB ケーブルと死角、デバッグ手段
+## USB cable, blind zone, and debugging means
 
-鏡に「支柱」として写り込んでいるのは USB ケーブル。ただし
-**バッテリー駆動に移行しなくても解決できる可能性がある。**
-カメラ自身の映り込みはどの方向でも `r_out` の 19〜26% を占めていて、
-そこはどのみち死角。ケーブルを放射方向でなく**カメラ本体の真下（光軸方向）**に
-引き出せば、その既存死角に隠れて追加の死角はゼロにできる。
-USB 給電とシリアルを保ったまま 255〜285 度を取り戻せるので先に試す価値がある。
+What appears in the mirror as a "pillar" is the USB cable. However,
+**this may be solvable without moving to battery power.**
+The reflection of the camera itself occupies 19–26% of `r_out` in every direction,
+and that is a blind zone anyway. If the cable is routed **straight down from the camera body
+(along the optical axis)** instead of radially, it hides in that existing blind zone and the
+additional blind zone can be made zero.
+This recovers 255–285° while keeping USB power and serial, so it is worth trying first.
 
-**BLE をデバッグ用に足すのは慎重に。** ESP32 は WiFi と BLE が同一の 2.4GHz
-ラジオを時分割する。この構成の WiFi は既に際どく（AP モードはアイドルでも
-ping ロス 33%、STA でも帯域を出すと 0.5fps まで落ちる）、BLE を常時同居させると
-デバッグのために本体機能を壊しかねない。入れるなら WiFi を止めて
-バッテリー診断専用に切り替える排他運用にすること。
+**Be careful about adding BLE for debugging.** On the ESP32, WiFi and BLE time-share the same
+2.4GHz radio. WiFi in this configuration is already marginal (AP mode has 33% ping loss even
+when idle; STA drops to 0.5fps when pushing bandwidth), and keeping BLE resident alongside it
+could break the core function for the sake of debugging. If it is added, run it exclusively:
+stop WiFi and switch to a battery-diagnostics-only mode.
 
-## 円錐鏡を採用しなかった理由
+## Why the cone mirror was not adopted
 
-途中で「凸面鏡は測れる範囲が狭い」ので円錐鏡を検討した。**円錐そのものは成立する**
-（俯角が像の半径に対して 1:1 で線形になり、方位も保存される）。実際に作って撮ったところ、
-鏡面の質・全周性ともに問題はなかった。採用しなかったのは、**測定解像度でフレームに収まらず**、
-かつ**周囲の状況を正確に写せなかった**ため。
+Along the way, a cone mirror was considered because "the convex mirror has a narrow measurable range". **The cone itself works**
+(the depression angle is linear 1:1 with image radius, and bearing is preserved). When one was actually built and photographed,
+neither the mirror surface quality nor the full-circle coverage was a problem. It was not adopted because **it did not fit in the frame at the measurement resolution**
+and **it could not image the surroundings accurately**.
 
-**六角錐で代用するのは不可。** 平面ファセットは法線が方位とともに回らないので、方位が
-ファセット中心へ引き寄せられる。圧縮率は立体角保存から `c = sinθ / cos δ` で厳密に出る
-（θ = 光軸からの角、δ = 反射後の俯角）。光線追跡で確認した結果:
+**Substituting a hexagonal pyramid is not acceptable.** The normal of a flat facet does not rotate with bearing, so
+bearings get pulled toward the facet center. The compression ratio follows exactly from solid-angle conservation as `c = sinθ / cos δ`
+(θ = angle from the optical axis, δ = depression angle after reflection). Confirmed by ray tracing:
 
-| 半頂角 | 面数 | 4–15cm 帯のカバー率 | 最大死角 |
+| Half-apex angle | Facets | Coverage of 4–15cm band | Max blind zone |
 |---|---|---|---|
 | 65° | 6 | 20.0% | 48° |
 | 75° | 6 | 60.0% | 24° |
 | 75° | 24 | 60.0% | 6° |
-| 任意 | 円錐 | **100%** | 0° |
+| Any | Cone | **100%** | 0° |
 
-**面数を増やしてもカバー率は上がらない**（穴が細かく分散するだけ）。近距離ほど穴が大きい。
-円錐を作るなら、六角錐に切るのではなく **扇形（角度 = 360°×sinα）を丸める**のが正しい。
-プラスチックミラーは可展面なので曲がるし、継ぎ目が 1 本で済む。
+**Increasing the facet count does not raise coverage** (the holes just become finer and more spread out). The holes are larger at close range.
+To make a cone, the right way is to **roll up a sector (angle = 360°×sinα)** rather than cutting a hexagonal pyramid.
+A plastic mirror is a developable surface so it bends, and only one seam is needed.
 
 - Python 3.10 / OpenCV 4.5.4 / NumPy 1.26
