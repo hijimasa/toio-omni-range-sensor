@@ -129,7 +129,7 @@ def fig_scan():
             color=NAVY_H, fontweight='bold')
     ax.set_rlim(0, 12.2)
     ax.set_rticks([4.0, 11.0])
-    ax.set_yticklabels(['2 cm', '23 cm'], fontsize=10.5, color=NAVY_H)
+    ax.set_yticklabels(['4 cm', '23 cm'], fontsize=10.5, color=NAVY_H)
     ax.set_rlabel_position(192)
     ax.set_xticks(np.radians([0, 90, 180, 270]))
     ax.set_xticklabels(['前', '左', '後', '右'], fontsize=13, color=NAVY_H)
@@ -213,7 +213,7 @@ def build():
     picture(slide, 'scan_simple.png', 6.95, img_y, 5.85, img_h)
 
     tiles = [('全周 360°', '5° ごと 72 方向'),
-             ('2 〜 23 cm', '測れる距離'),
+             ('4 〜 23 cm', '測れる距離'),
              ('可動部なし', 'カメラ 1 台だけ'),
              ('ROS 2 対応', 'そのまま地図・自律走行へ')]
     ty, th_ = 5.72, 1.20

@@ -227,7 +227,7 @@ def fig_scan():
 
     ax.set_rlim(0, 12.4)
     ax.set_rticks([4.1, 7.5, 11.1])
-    ax.set_yticklabels(['2.2cm', '12', '23.3cm'], fontsize=6.8, color=NAVY)
+    ax.set_yticklabels(['3.6cm', '12', '23.3cm'], fontsize=6.8, color=NAVY)
     ax.set_rlabel_position(192)
     ax.set_xticks(np.radians([0, 90, 180, 270]))
     ax.set_xticklabels(['前 0°', '+90°', '180°', '−90°'], fontsize=8, color=NAVY)

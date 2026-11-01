@@ -2,6 +2,8 @@
 
 ![デモ動画](./figs/toio-omni-range.gif)
 
+*nav2 で障害物を避けて走っているところ（RViz の LaserScan）。この動画は鏡ホルダーを付ける前の構成で撮ったもので、現行構成で取り直す予定。*
+
 toio 用の全周距離センサ。M5Stack **Timer Camera F** と凸面鏡を組み合わせたカタディオプトリック系で
 全周を 1 枚の画像に写し、地面と物体の**彩度差**から 5 度刻み・72 方向の距離を出す。
 
@@ -20,11 +22,12 @@ toio 用の全周距離センサ。M5Stack **Timer Camera F** と凸面鏡を組
 
 | 項目 | 値 |
 |---|---|
-| 鏡 | 半球面の鏡面ステンレス |
+| 鏡 | uxcell ステンレス製中空半球、直径約 60 mm |
+| ホルダー | `stl/mirror_holder.stl`（黄色、腕 4 本）。鏡とカメラの位置を固定する |
 | 測定 framesize | **CIF 400x296**（RGB565）。全画角が入る中でいちばん速い |
-| 較正 | `cx=264, cy=238.4, r_in=25.6, r_out=200`（640 幅換算） |
+| 較正 | `cx=265.6, cy=235.7, r_in=25.6, r_out=200`（640 幅換算） |
 | 距離フィット | `r(d) = -8.31 + 115.76*arctan(d/7.300)`、実測 4.5〜21 cm、rms 0.9 px |
-| LaserScan の範囲 | **0.022 〜 0.233 m** |
+| LaserScan の範囲 | **0.036 〜 0.233 m** |
 | レート | 4.1 Hz（`scan_period` 200 ms） |
 | フレームの鮮度 | 測定するフレームは約 98 ms 前のもの |
 
@@ -49,15 +52,66 @@ tools/ble_client.py         BLE でスキャンを受信する CLI
 tools/gen_firmware_calib.py 較正 → デバイス用 C ヘッダ・ROS パラメータの生成
 calib/mirror_calib.json     鏡のキャリブレーション
 calib/ignore_mask.png       無視領域マスク（パノラマ座標、白=使う / 黒=無視）
+stl/mirror_holder.stl       鏡ホルダー（3D プリント用）
 ros2/toio_omni_range/       ROS 2 ドライバ。BLE → sensor_msgs/LaserScan
   toio_omni_range/omni_protocol.py  パケット定義（ble_client.py と共有）
+ros2/toio_omni_bringup/     toio_ros2 と一緒に起動する bringup、nav2 launch、collision_monitor、マットの地図
+ros2/toio_omni_mapping/     マットを走り回って地図を作る（Position ID を真値にした占有格子）
 docker/                     ROS 2 用コンテナ（このリポジトリに ROS は要らない）
 ```
 
+## ROS 2 ワークスペースへの組み込み
+
+**このリポジトリは、そのまま `colcon_ws/src/` に置いて（またはサブモジュールにして）よい。**
+colcon は `package.xml` のあるディレクトリしか拾わないので、`firmware/` `tools/` `calib/` は
+無視され、ビルドされるのは `ros2/` の 3 パッケージだけになる。
+
+```bash
+cd colcon_ws/src
+git submodule add https://github.com/<you>/toio-omni-range-sensor.git   # または git clone
+pip install bleak            # rosdep では解決できない唯一の依存
+cd .. && colcon build --symlink-install
+```
+
+| パッケージ | 中身 | 依存 |
+|---|---|---|
+| `toio_omni_range` | センサのドライバ。BLE → `sensor_msgs/LaserScan` | rclpy、bleak |
+| `toio_omni_bringup` | キューブ（`toio_ros2`）とセンサを一緒に上げる bringup、nav2、collision_monitor | `toio_ros2`、navigation2 |
+| `toio_omni_mapping` | マットの地図作成 | `toio_omni_bringup`、nav2_map_server |
+
+センサだけ使うなら `toio_omni_range` だけで足り、`toio_ros2` が無くてもビルドは通る
+（bringup と mapping は exec_depend なので、無い依存は起動時にだけ効く）。
+
+`docker/` はこの配置をそのまま使っている。隣に `toio_ros2_dev_kit` がチェックアウトされて
+いればキューブのドライバ `toio_ros2` もマウントされる。
+
 ## ハードウェア
 
-Timer Camera F（M5Stack K034-F、ESP32 + OV3660 + 魚眼レンズ）。ピン配置は
-[m5stack/TimerCam-arduino](https://github.com/m5stack/TimerCam-arduino) に合わせてある。
+<img src="./figs/robot.jpg" width="320" alt="toio の上に Timer Camera F、その上に黄色のホルダーと半球鏡">
+
+| 部品 | 役割 |
+|---|---|
+| toio コアキューブ | 台車。平らなトッププレートの上にすべてを載せる |
+| M5Stack Timer Camera F（K034-F） | ESP32 + OV3660 + 魚眼レンズ。レンズを真上に向けて置く |
+| 鏡ホルダー `stl/mirror_holder.stl` | 3D プリント品。カメラのレンズ周りに座り、腕 4 本で鏡を支える |
+| uxcell ステンレス製中空半球（直径約 60 mm、[Amazon](https://amzn.asia/d/084Gm1Y4)） | 凸面を下（カメラ側）に向けてホルダーのリングに載せる |
+
+組み立ては下から順に、
+
+1. toio のトッププレートに Timer Camera F を**両面テープ**で貼る（レンズが上）。
+2. カメラの上にホルダーの基部を載せ、**ホットグルー**で固定する。
+3. ホルダーのリングに鏡を載せ、縁を**ホットグルー**で固定する。
+
+ホルダー・鏡の接着はすべてホットグルーで、外して付け直せる。ただし
+**鏡とカメラの距離・傾き・ホルダーの回転が変わると較正とマスクは移らない。**
+付け直したらステップ 2〜4（中心、マスク、距離フィット）をやり直すこと。
+腕の方位（+48 / +138 / −134 / −44 度）はホルダーが toio の前方に対してどう回って
+付いているかで決まり、いまのマスクはこの個体の取り付けに対するものになっている。
+
+ホルダーが黄色なのは意図的で、鏡に写り込む基部と腕を**色相でマスクする**ため
+（ステップ 3 の「ホルダーは色相で落とす」）。別の色で刷るなら `--holder-hue` を合わせる。
+
+ピン配置は [m5stack/TimerCam-arduino](https://github.com/m5stack/TimerCam-arduino) に合わせてある。
 
 | 用途 | GPIO |
 |---|---|
@@ -68,8 +122,8 @@ Timer Camera F（M5Stack K034-F、ESP32 + OV3660 + 魚眼レンズ）。ピン�
 
 **GPIO33 を HIGH に保持しないとバッテリ駆動時に電源が落ちる。** `setup()` の先頭で立てている。
 
-カメラを上向き、その上に凸面鏡を下向きに置く配置を想定。画像にはドーナツ状（環状）に
-周囲が写り、中心付近はカメラ自身の映り込み、外周が水平方向（遠方）に対応する。
+カメラが上向き、その上に凸面鏡が下向きなので、画像にはドーナツ状（環状）に周囲が写り、
+中心付近はカメラとホルダー基部の映り込み、外周が水平方向（遠方）に対応する。
 
 ## ファームウェアの書き込み
 
@@ -122,14 +176,32 @@ AP モードしか使えない場合は、`/ctrl?var=interval&val=<ms>` でフ�
 広げて throughput を落とす（既定 150ms ≒ 6.7fps）。ただしこれは延命策であって
 解決ではない（実測で切断までの時間が 7 秒 → 22 秒に伸びただけ）。
 
+## 較正の全体手順
+
+鏡・ホルダー・カメラのどれかを動かしたら、ここから通す。
+
+1. **較正ビルドを焼く**: `wifi_config.h` の `START_WIFI_AT_BOOT` を 1 にして書き込む。
+   測定ビルド（既定の 0）は BLE から WiFi を起こせても、ヒープ不足で JPEG に切り替えられず
+   `/still` と `/stream` が応答しない（「既知の制約」）。
+2. **中心と半径**（ステップ 2）: `omni_viewer.py --set-framesize 8` で `cx, cy, r_in, r_out` を
+   合わせて `s`。`theta0=90, ccw=true` は触らない（「撮像設定と方位の規約」）。
+3. **マスク**（ステップ 3）: 床に何も置かず `mask_editor.py --set-framesize 8 --holder-hue 15 40 --far-radius 139`
+   で `a` → 手直し → `s`。
+4. **距離**（ステップ 4）: 既知距離に対象を置いて `omni_range.py --record-distance <cm> --record-repeat 7` を
+   距離ごとに繰り返し、`fit_range.py --write --valid-range <min> <max>`。
+5. **デバイスへ**（ステップ 5）: `gen_firmware_calib.py` で `scan_calib.h` と ROS の yaml を生成し、
+   `START_WIFI_AT_BOOT` を 0 に戻して書き込む。
+6. **確認**: `ble_client.py --seconds 20` で空の床にヒットが出ないこと、既知位置の物体が
+   正しい方位・距離に出ること。
+
 ## 全周視野の確認
 
 ```bash
 pip install -r tools/requirements.txt
-tools/omni_viewer.py --url http://<ip>:81/stream
+tools/omni_viewer.py --url http://<ip>:81/stream --set-framesize 8
 
 # リンクが不安定なとき: MJPEG の代わりに /still を毎秒 N 回取りに行く
-tools/omni_viewer.py --still-url http://<ip>/still --still-rate 4
+tools/omni_viewer.py --still-url http://<ip>/still --still-rate 4 --set-framesize 8
 ```
 
 ストリームが無音のまま止まる（ソケットは開いたまま）症状に備えて、4 秒フレームが
@@ -209,7 +281,8 @@ uptime / 電池電圧 / heap / RSSI のハートビートが入るので、バ�
 
 ```bash
 # 1. 床に何も置かない状態で、無視領域マスクを作る
-tools/mask_editor.py --url http://<ip>:81/stream --set-framesize 8   # a で自動生成 → 手で修正 → s で保存
+tools/mask_editor.py --url http://<ip>:81/stream --set-framesize 8 \
+    --holder-hue 15 40 --far-radius 139   # a で自動生成 → 手で修正 → s で保存
 
 # 2. スキャン
 tools/omni_range.py --url http://<ip>:81/stream --set-framesize 8
@@ -317,11 +390,53 @@ enum 値はライブラリ版で動くので、**届いたフレームのサイ�
 超えるまでを無視領域とする）が、**床に何も置いていない状態で作ること**。
 物体があるとそれごとマスクされる。
 
+### ホルダーは色相で落とす（2026-11-01、黄色ホルダー）
+
+ホルダーを付けると鏡像に 3 つのものが加わる。いずれも床と同じ明るさなので、
+明度しか見ない `a` の自動生成はまるごと「使える」と判定し（97% が有効のまま）、
+次のスキャンで全部が障害物になる。そこで `--holder-hue LO HI`（OpenCV の色相 0〜179、
+黄色は `15 40`）を与えると `a` が色相でも塗る。
+
+| 写るもの | 場所（較正 px） | 扱い |
+|---|---|---|
+| レンズ周りの基部（四角） | 辺の方位で 40、角と腕の根元で 56〜64 | 列ごとに内側から最後の黄色行まで閉じる |
+| 腕 4 本 | 方位 +43〜57、+135〜141、−140〜−128、−50〜−38（90 度間隔） | 全半径を遮るので列ごと閉じる（余白 3 度）。PC 側で 7 方向、デバイス側で 12 方向が常時欠測 |
+| 外周のリング | 鏡の縁（124〜127 device px）より外 | 遠端 139 で既に落ちている |
+
+**腕の判定は絶対値ではなく床からの彩度の上昇（+15）で見る。** 光源と反対側の腕は
+彩度が 44 しかなく幅 3 度で、絶対しきい値（S≥70）では 4 本中 3 本しか拾えなかった。
+
+**床の基準に黄色が混ざると自己隠蔽が起きる。** 基部の四角が有効領域に残ったままだと
+床の彩度が 37〜74 に膨らみ（本当の床は 21）、しきい値が上がって腕も四角も検出から
+漏れる。「検出されたところを除外する」手順はこの状態では成り立たないので、
+マスクは色相で先に作る。
+
+ホルダー装着後の実測（CIF、較正は中心だけ 2 px 以内で詰め直し、`r_out` と距離フィットは据え置き）:
+空の床で誤検出 0（USB ケーブルの映り込み +145〜+170 度を除く）。
+2 回の撮影でマスクの食い違いは 1.9%。近端は 2.2 cm → 3.6 cm に後退する。
+デバイス側（BLE、98 スキャン）も同じで、ヒットはケーブルの +155〜+170 度だけ。
+
+**デバイス用マスクは「方向セルの列の過半が開いているときだけ使う」に変えた**（`gen_firmware_calib.py`）。
+PC は 10 列の中央値を取るときマスク列を 0 にするので、大半がマスクの方向は何も出ないが、
+デバイスのサブレイ 5 本にはマスクが無く、中央値が腕の縁を拾う。`any` のままだと +140 度に
+5 cm の障害物がスキャンの 14% に出た。欠測が 7 → 12 方向に増えるのはこのため。
+`--far-radius 139` は遠端の帯を `a` で一緒に閉じるためのもの（ステップ 4 の表）。
+
+`r_in` は 25.6 のまま。`gen_firmware_calib.py` は 27 device px まで上げられると言うが、
+`range_fit.json` が `calib_r_in` で較正の同一性を見ているので、上げるなら距離を測り直してから。
+
 ## ステップ 4: 半径 → 距離（完了、半球ステンレス + CIF 400x296）
 
 ```bash
+# 距離ごとに: 対象を鏡の軸から d cm に置き、7 フレームの中央値を記録する
+tools/omni_range.py --url http://<ip>:81/stream --set-framesize 8 \
+    --record-distance 6 --record-bearing 0 --record-repeat 7   # --record-bar は直線のバーのとき
+# 全点取れたらフィット
 tools/fit_range.py --write --valid-range 4.5 21
 ```
+
+距離は**鏡の軸（= レンズ中心）から対象の手前面までの水平距離**。モデルがそう定義しているので、
+キューブの前面からではない。対象は床との彩度差が大きい有彩色の箱かバーが扱いやすい。
 
 `r(d) = -8.31 + 115.76 * arctan(d / 7.300)`（6 点 / 4.5〜21cm、**残差 rms 0.9px、最大 1.6px**）
 
@@ -333,7 +448,7 @@ tools/fit_range.py --write --valid-range 4.5 21
 | 130 | 18.5 cm | 0.47 cm/px | 実測範囲 |
 | 139（マスク端） | 24.1 cm | 0.75 cm/px | 外挿 |
 
-**LaserScan の範囲は 0.022〜0.233 m。**
+**LaserScan の範囲は 0.036〜0.233 m**（近端はホルダー基部の映り込みで決まる。ステップ 3 の「ホルダーは色相で落とす」）。
 
 ### 遠端はマスクで決める、`r_out` ではない
 
@@ -599,7 +714,7 @@ curl "http://<ip>/power?off=1"
 curl "http://<ip>/ctrl?var=scan_period&val=200"   # 0 = 上限なし
 ```
 
-測距範囲 12 cm に対し 5 Hz なら、20 cm/s で走っても障害物を 3 回見られる。
+測距範囲 23 cm に対し 5 Hz なら、20 cm/s で走っても障害物を 5 回見られる。
 速く走らせるなら上げる。
 
 **重複フレームの除去は空振りだった。** ベンチの 7.9 fps と実際の 11.6 Hz を
@@ -632,10 +747,34 @@ ros2 launch toio_omni_range omni_range.launch.py device_address:=AA:BB:CC:DD:EE:
 
 - **スキャンは 1 枚のカメラフレームのスナップショット**。72 本が同時刻なので
   走査中の歪みが無く、`time_increment` は 0。
-- **地平は約 11 cm**。`range_min` / `range_max` はファームと同じ較正から
+- **届くのは約 23 cm、近側 3.6 cm は死角**。`range_min` / `range_max` はファームと同じ較正から
   `gen_firmware_calib.py` が `params/omni_range_calib.yaml` に生成する
-  （0.041〜0.111 m）。**手で書かないこと** — 鏡と食い違った LaserScan は、
+  （0.036〜0.233 m）。**手で書かないこと** — 鏡と食い違った LaserScan は、
   下流が黙って全点を捨てる。
+
+### nav2 で動かす
+
+キューブと一緒に上げる手順は [ros2/toio_omni_bringup/README.md](ros2/toio_omni_bringup/README.md) に、
+地図作成は [ros2/toio_omni_mapping/README.md](ros2/toio_omni_mapping/README.md) にある。要点だけ:
+
+```bash
+# コンテナ内（toio_ros2 が同じワークスペースにあること）
+ros2 launch toio_omni_bringup toio_omni_bringup.launch.py \
+    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # キューブ + センサ + RViz
+ros2 launch toio_omni_mapping mapping.launch.py \
+    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # マットを走って地図を作る
+ros2 launch toio_omni_bringup toio_omni_nav2.launch.py \
+    cube_id:=a1b device_address:=AA:BB:CC:DD:EE:FF          # nav2。RViz の 2D Goal Pose で目標
+```
+
+- **`cube_id` と `device_address` は両方指定する。** キューブとセンサが同じ BLE アダプタを
+  使うので、発見スキャンを走らせると同居する接続が不安定になる。
+- 2 つのドライバは互いを知らず、TF（`map → center → omni_link`）でだけ出会う。
+  鏡の位置は `sensor_x/y/z/yaw` で、`sensor_yaw=0`（センサの 0 度 = キューブ正面）は検証済み。
+- 指令は `controller_server → cmd_vel_raw → collision_monitor → cmd_vel → toio_ros2`。
+  `goal_pose` は `cube_goal_pose` に逃がしてある（キューブ内蔵の目標移動は `cmd_vel` を
+  通らず、nav2 と競合するため）。
+- 壁は**彩度のある色**で、鏡より高くすること。白い床に白い壁は映らない。
 
 ### 配列の並べ替えが要る
 
@@ -670,8 +809,10 @@ nav2 の collision_monitor が「センサ死亡」と判断してロボット�
 
 ### 未確認のこと
 
-RViz まで通ることは確認した（冒頭の動画）。ただし **接続・再接続・スキャン欠落の
-挙動と、nav2 のコストマップに入れたときの挙動は実測していない**。
+nav2 で障害物を避けて走るところまでは確認した（冒頭の動画。鏡ホルダー以前の構成）。
+ホルダー付きの現行構成での nav2 走行と、**接続・再接続・スキャン欠落の挙動は未計測**。
+`nav2_params.yaml` の `obstacle_max_range` などは現行の 0.233 m に合わせて書き換えたが、
+その値で走らせてはいない。
 
 残っている既知の差:
 
@@ -733,12 +874,15 @@ RViz まで通ることは確認した（冒頭の動画）。ただし **接続
 
 ## 検証済み環境・実測値
 
-- PlatformIO Core 6.1.19 / espressif32 (pioarduino) 55.3.37 / Arduino ESP32 3.3.7
-  → Flash 33.8% (1,062,477 / 3,145,728 B), RAM 17.5%
+- PlatformIO Core 6.2.0 / espressif32 (pioarduino) 55.3.37 / Arduino ESP32 3.3.7
+  → Flash 42.6% (1,340,953 / 3,145,728 B), RAM 31.5%（2026-11-01、測定ビルド）
 - 実機: ESP32-D0WDQ6-V3 rev3.1 / Flash 4MB / PSRAM 4MB / MAC 3c:8a:1f:d7:84:4c
 - 動作確認済み: `/` `/still` `/status` `/ctrl` `/stream` `/scan` `/bench` `/radio` `/power`、
   framesize 切り替え（QVGA / 320x320 / CIF / HVGA / VGA / XGA / UXGA）、
   ストリーム再接続、BLE スキャン配信、ROS 2 の LaserScan → RViz
-- 鏡: 半球面の鏡面ステンレス（凸面鏡 → 円錐 → 半球と 3 回替えている。
+- 鏡: uxcell ステンレス製中空半球 約 60 mm（凸面鏡 → 円錐 → 半球と 3 回替えている。
   円錐を諦めた経緯は下記）
 
+## ライセンス
+
+Apache License 2.0（[LICENSE](LICENSE)）。同居させる `toio_ros2` と揃えてある。
