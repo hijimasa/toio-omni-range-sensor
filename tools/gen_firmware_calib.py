@@ -14,14 +14,13 @@ silently thrown away by every consumer, so they are generated here too.
 """
 
 import argparse
-import json
 import os
 import sys
 
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from omni_common import (CALIB_DIR, PANO_H, PANO_W, N_RAYS, load_calib,
+from omni_common import (PANO_H, PANO_W, N_RAYS, load_calib,  # noqa: E402
                          load_mask, RangeFit)
 
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "firmware",
@@ -54,6 +53,7 @@ def usable_radius_span(dev, cal):
             last.append(int(idx[-1]))
     if not first:
         raise SystemExit("every direction is fully masked -- nothing to measure")
+
     def to_r(j):
         return cal.r_in + (cal.r_out - cal.r_in) * j / float(RADIAL_N - 1)
     return to_r(min(first)), to_r(max(last))
@@ -122,14 +122,20 @@ def main():
     if fit.matches(cal) is False:
         raise SystemExit("range_fit.json belongs to a different calibration")
 
-    # PC mask (720 x 200) -> device grid (72 x RADIAL_N), keeping "ignore" if any
-    # of the covered PC cells is ignored, so the device is never less careful.
+    # PC mask (720 x 200) -> device grid (72 x RADIAL_N). Radially, a device
+    # sample is usable only if every PC row it covers is. Angularly, more than
+    # half of the direction's columns must be open: the PC takes the median
+    # across the 10 columns with masked ones zeroed, so a direction that is
+    # mostly mask reads as nothing there -- but the device has no per-subray
+    # mask, its 5 subrays all sample the image and the median sees whatever is
+    # in the masked part. With `any` here, the edge of a holder arm came back
+    # as a 5 cm obstacle in 14% of scans on the device and never on the PC.
     m = load_mask()
     cols = PANO_W // N_RAYS
     dev = np.ones((N_RAYS, RADIAL_N), bool)
     for i in range(N_RAYS):
         band = m[:, i * cols:(i + 1) * cols]      # (PANO_H, cols)
-        usable_row = band.any(axis=1)
+        usable_row = band.mean(axis=1) > 0.5
         for j in range(RADIAL_N):
             r0 = int(j * PANO_H / RADIAL_N)
             r1 = max(int((j + 1) * PANO_H / RADIAL_N), r0 + 1)

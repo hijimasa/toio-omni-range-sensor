@@ -14,7 +14,9 @@ missed.
 
   left drag    mark as ignored
   right drag   mark as usable again
-  a            auto-fill from the current frame
+  a            auto-fill from the current frame (dark self-reflection; with
+               --holder-hue also the coloured mount; with --far-radius also
+               the band past the far end)
   [ / ]        brush smaller / larger
   r            reset to all-usable
   s            save to calib/ignore_mask.png
@@ -29,9 +31,10 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from omni_common import (DEFAULT_CALIB, DEFAULT_MASK, PANO_H, PANO_W,
+from omni_common import (DEFAULT_CALIB, DEFAULT_MASK, PANO_H, PANO_W,  # noqa: E402
                          add_source_args, annotate_panorama, auto_mask,
-                         build_maps, first_frame, load_calib, load_mask,
+                         holder_mask, far_mask,
+                         build_maps, load_calib, load_mask,
                          open_source, save_mask, unwrap, check_frame,
                          add_framesize_arg, set_framesize, first_frame_at)
 
@@ -87,6 +90,14 @@ def main():
     ap.add_argument("--calib", default=DEFAULT_CALIB)
     ap.add_argument("--mask", default=DEFAULT_MASK)
     add_framesize_arg(ap)
+    ap.add_argument("--holder-hue", type=int, nargs=2, metavar=("LO", "HI"),
+                    help="OpenCV hue range (0-179) of the mirror mount, e.g. "
+                         "15 40 for the yellow holder. 'a' then also closes "
+                         "the base reflected around the middle and the columns "
+                         "the arms block")
+    ap.add_argument("--far-radius", type=float, metavar="PX",
+                    help="calibration px past which 'a' closes everything "
+                         "(139 on the hemisphere, see README step 4)")
     args = ap.parse_args()
 
     # The mask is in panorama coordinates, which come from the calibration,
@@ -123,6 +134,10 @@ def main():
             break
         elif k == ord("a"):
             auto = auto_mask(pano)
+            if args.holder_hue:
+                auto &= holder_mask(pano, tuple(args.holder_hue))
+            if args.far_radius:
+                auto &= far_mask(cal, args.far_radius)
             # union: keep whatever was already painted by hand
             p.mask_u8 = np.minimum(p.mask_u8, auto.astype(np.uint8) * 255)
             print("auto-filled: %.1f%% ignored" % (100.0 * (p.mask_u8 < 128).mean()))

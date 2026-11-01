@@ -511,6 +511,65 @@ def auto_mask(pano, margin_rows=6):
     return mask
 
 
+def holder_mask(pano, hue_range=(15, 40), sat_min=70, val_min=70,
+                inner_frac=0.4, arm_sat_rise=15.0, grow=6):
+    """Ignore region for a coloured mount: the base around the lens and the
+    arms that hold the mirror.
+
+    auto_mask() only sees brightness, and a yellow holder is as bright as the
+    floor -- it comes through as "usable" and then as an obstacle in every
+    scan. So this keys on hue instead. Two kinds of feature:
+
+    - the base around the lens, reflected at the middle of the mirror: per
+      column, everything from r_in out to the last coloured row inside the
+      inner part of the annulus is closed.
+    - the arms, which stand between camera and mirror and block the whole
+      radius: a column whose saturation stands clearly above the floor across
+      the middle of the annulus is closed top to bottom. The test is relative
+      (floor + arm_sat_rise) because the arm facing away from the light is
+      only weakly coloured -- an absolute hue test misses it.
+
+    Returns True = usable, like auto_mask().
+    """
+    hsv = cv2.cvtColor(pano, cv2.COLOR_BGR2HSV)
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1].astype(np.float32), hsv[:, :, 2]
+    lo, hi = hue_range
+    hue_ok = (h >= lo) & (h <= hi) if lo <= hi else (h >= lo) | (h <= hi)
+    col = hue_ok & (s >= sat_min) & (v >= val_min)
+    if grow:
+        k = np.ones((2 * grow + 1, 2 * grow + 1), np.uint8)
+        col = cv2.dilate(col.astype(np.uint8), k) > 0
+    hh, w = col.shape
+    mask = np.ones((hh, w), bool)
+
+    inner = int(hh * inner_frac)
+    for c in range(w):
+        idx = np.where(col[:inner, c])[0]
+        if len(idx):
+            mask[:idx[-1] + 1, c] = False
+
+    mid = s[int(hh * 0.2):int(hh * 0.8), :]
+    prof = np.median(mid, axis=0)
+    # smooth over +-0.5 deg; the floor level is the median column
+    prof = np.convolve(np.r_[prof[-1:], prof, prof[:1]], np.ones(3) / 3.0, "same")[1:-1]
+    arm = prof > np.median(prof) + arm_sat_rise
+    if grow:
+        arm = np.convolve(np.r_[arm[-grow:], arm, arm[:grow]].astype(int),
+                          np.ones(2 * grow + 1), "same")[grow:-grow] > 0
+    mask[:, arm] = False
+    return mask
+
+
+def far_mask(cal, r_far, height=PANO_H, width=PANO_W):
+    """Close every row sampled past r_far (calibration px). On a hemisphere the
+    outer band looks at the horizon, where a pixel is tens of cm; the far end
+    of the scan is set here, not by r_out."""
+    rows = np.array([cal.radius_of_row(r, height) for r in range(height)])
+    mask = np.ones((height, width), bool)
+    mask[rows > r_far, :] = False
+    return mask
+
+
 # ------------------------------------------------------------- range fit ---
 
 DEFAULT_RANGE_FIT = os.path.join(CALIB_DIR, "range_fit.json")
