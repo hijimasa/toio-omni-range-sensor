@@ -1,2 +1,4 @@
 numpy>=1.21
 opencv-python>=4.5
+scipy>=1.7        # fit_range.py
+bleak>=0.21       # ble_client.py, measure_wifi_drain.py

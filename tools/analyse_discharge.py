@@ -12,7 +12,6 @@ the surface charge decays and reads as a drain that is not there.
 
 import argparse
 import csv
-import sys
 
 
 def load(path):

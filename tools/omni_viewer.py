@@ -30,9 +30,9 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from omni_common import (DEFAULT_CALIB, PANO_H, PANO_W, Calib, add_source_args,
+from omni_common import (DEFAULT_CALIB, PANO_H, PANO_W, Calib, add_source_args,  # noqa: E402
                          annotate_panorama, auto_circle, build_maps, coverage,
-                         draw_overlay, first_frame, load_calib, open_source,
+                         draw_overlay, load_calib, open_source,
                          save_calib, unwrap, check_frame, add_framesize_arg,
                          set_framesize, first_frame_at)
 
@@ -72,7 +72,10 @@ def main():
     cv2.namedWindow("panorama", cv2.WINDOW_NORMAL)
     cv2.namedWindow("saturation", cv2.WINDOW_NORMAL)
     rmax = int(np.hypot(w, h) / 2)
-    nop = lambda v: None
+
+    def nop(v):
+        pass
+
     cv2.createTrackbar("cx", win, int(cal.cx), w, nop)
     cv2.createTrackbar("cy", win, int(cal.cy), h, nop)
     cv2.createTrackbar("r_in", win, int(cal.r_in), rmax, nop)

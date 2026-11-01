@@ -31,7 +31,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from omni_common import CALIB_DIR, load_calib
+from omni_common import CALIB_DIR, load_calib  # noqa: E402
 
 SAMPLES = os.path.join(CALIB_DIR, "range_samples.json")
 FIT = os.path.join(CALIB_DIR, "range_fit.json")

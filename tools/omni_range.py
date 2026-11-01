@@ -34,9 +34,9 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from omni_common import (N_RAYS, PANO_H, PANO_W, RAY_STEP_DEG, DEFAULT_CALIB,
+from omni_common import (N_RAYS, PANO_H, PANO_W, RAY_STEP_DEG, DEFAULT_CALIB,  # noqa: E402
                          DEFAULT_MASK, add_source_args, annotate_panorama,
-                         build_maps, col_to_bearing, first_frame, load_calib,
+                         build_maps, load_calib,
                          load_mask, open_source, unwrap, RangeFit, check_frame,
                          add_framesize_arg, set_framesize, first_frame_at)
 
@@ -229,7 +229,6 @@ def wrap180(a):
 
 def draw_pano(result, scanner):
     vis = result["pano"].copy()
-    h = vis.shape[0]
     for i in range(N_RAYS):
         c0 = i * COLS_PER_RAY
         r = result["rows"][i]
