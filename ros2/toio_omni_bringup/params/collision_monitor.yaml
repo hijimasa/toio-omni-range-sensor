@@ -1,0 +1,77 @@
+# Velocity gate between whatever commands the cube and the cube itself.
+#
+# nav2_collision_monitor rather than a node of our own: this is a solved
+# problem, and the parts that are easy to get wrong (transforming the scan into
+# the base frame, timing out a stale source, ramping instead of slamming) are
+# already right here.
+#
+# It gates cmd_vel and nothing else. toio_ros2's cube_goal_pose drives the cube
+# with its own motor_control_target over BLE, which never passes through here --
+# whatever publishes that is on its own (see toio_omni_mapping/coverage_drive).
+#
+# ONE POLYGON, AND IT IS AN "APPROACH" ONE. A fixed stop circle is the obvious
+# thing to write and it is wrong for a robot that works inside a 20 cm arena:
+# with walls permanently within a few centimetres, a circle would be triggered
+# everywhere near the edge and the robot could not even reverse out, because a
+# stop polygon does not care which way the command points. "approach" projects
+# the footprint along the commanded velocity and only intervenes if that motion
+# would actually collide, so driving away from a wall stays allowed.
+collision_monitor:
+  ros__parameters:
+    base_frame_id: "center"           # overridden by the launch when frame_prefix is set
+    odom_frame_id: "map"
+    cmd_vel_in_topic: "cmd_vel_raw"
+    # Not straight to the cube: cmd_vel_deadband is the last stage,
+    # because "approach" scales the command down and could drop it back
+    # under the motor deadband.
+    cmd_vel_out_topic: "cmd_vel_gated"
+    state_topic: "collision_monitor_state"
+    # toio_ros2 subscribes to a plain Twist. Jazzy added a switch for
+    # publishing TwistStamped instead, and later distros flipped its
+    # default; pinning it means the cube keeps receiving commands across
+    # that change. Harmless where the parameter does not exist -- a params
+    # file entry for an undeclared parameter is ignored.
+    enable_stamped_cmd_vel: false
+    transform_tolerance: 0.2
+    source_timeout: 1.0
+    # The mat's Position ID is absolute and jumps when the cube leaves the mat,
+    # which is not the smooth odometry this correction assumes. The scan is a
+    # single-frame snapshot at 5 Hz on a slow robot, so there is little to
+    # correct for anyway.
+    base_shift_correction: False
+    stop_pub_timeout: 2.0
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      # A circle rather than the costmap's published footprint, so this works
+      # with plain teleop too -- taking the footprint from a topic would make
+      # the safety layer depend on nav2 running. Keep the radius equal to
+      # robot_radius in nav2_params.yaml: 32 mm cube, circumscribed.
+      type: "circle"
+      radius: 0.023
+      action_type: "approach"
+      # How far ahead the motion is projected. At the 0.05 m/s cap this is
+      # 6 cm of lookahead, which sits just outside the sensor's 3.6 cm blind
+      # zone -- shorter and the obstacle would vanish before the monitor acted.
+      time_before_collision: 1.2
+      # 1 mm per step at the speed cap, so a 5 mm obstacle cannot be stepped
+      # over by the projection.
+      simulation_time_step: 0.02
+      # Two rays, not six. A dry cell at 6 cm was only ever seen by a handful of
+      # directions, and the step 3 lesson was not to discard small returns --
+      # the detection threshold is already tuned for zero false positives on an
+      # empty floor, so the filtering belongs there and not here.
+      min_points: 2
+      visualize: True
+      polygon_pub_topic: "polygon_approach"
+      enabled: True
+    observation_sources: ["scan"]
+    scan:
+      type: "scan"
+      topic: "scan"
+      enabled: True
+
+lifecycle_manager_collision_monitor:
+  ros__parameters:
+    autostart: true
+    node_names: ["collision_monitor"]
+    bond_timeout: 0.0

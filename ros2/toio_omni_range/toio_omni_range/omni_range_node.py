@@ -9,7 +9,7 @@ Two things differ from a rotating lidar and are worth knowing:
 
 * A scan is a *snapshot*. All 72 rays come from one camera frame, so there is no
   within-scan motion skew and `time_increment` is 0.
-* The horizon is about 11 cm. `range_min`/`range_max` come from the same
+* The scan reaches about 23 cm. `range_min`/`range_max` come from the same
   calibration as the firmware, generated into params/omni_range_calib.yaml by
   tools/gen_firmware_calib.py -- do not type them in by hand.
 """
@@ -47,8 +47,8 @@ class OmniRangeNode(Node):
         # Overridden by the generated calibration params; these defaults are the
         # mirror horizon of the 320x320 configuration and exist only so the node
         # starts without a params file.
-        self.declare_parameter('range_min', 0.040)
-        self.declare_parameter('range_max', 0.111)
+        self.declare_parameter('range_min', 0.036)
+        self.declare_parameter('range_max', 0.233)
         # Minimum spacing between scans, sent to the unit on connect. 0 leaves
         # the firmware default (200 ms) alone.
         self.declare_parameter('scan_period_ms', 0)

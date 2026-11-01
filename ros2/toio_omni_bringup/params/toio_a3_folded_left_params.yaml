@@ -1,0 +1,24 @@
+# A3 developer mat folded in half, using the half nearer the Position ID origin.
+#
+# The A3 mat spans x 98..402 (304 units) over 0.420 m and y 142..358 (216 units)
+# over 0.297 m, i.e. about 1.38 mm per unit on both axes. Folding halves the
+# 420 mm side, so x stops at the crease, (98 + 402) / 2 = 250, and 152 units is
+# 0.210 m. The y range is untouched.
+#
+# Getting this wrong is not a small error. With toio_ros2's own A4 file --
+# 0.297 x 0.210 m over the *full* A3 unit range -- every distance comes out at
+# 0.707 of its real size, and goals near the far edge land past the crease, on
+# the half that is folded underneath and has no Position ID at all. The cube
+# drives off the mat, pushing whatever stands at the crease out of the way.
+#
+# Which half is yours: load this file, drive the cube to both extremes of x and
+# watch /toio/pose. This one is right if x stays within roughly 0.00..0.21.
+# If it runs 0.21..0.42, use toio_a3_folded_right_params.yaml instead.
+toio_ros2_node:
+  ros__parameters:
+    field_min_x: 98.0
+    field_max_x: 250.0
+    field_min_y: 142.0
+    field_max_y: 358.0
+    field_width_meter: 0.210
+    field_height_meter: 0.297

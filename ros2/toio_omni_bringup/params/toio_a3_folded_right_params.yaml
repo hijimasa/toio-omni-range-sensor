@@ -1,0 +1,15 @@
+# A3 developer mat folded in half, using the half further from the Position ID
+# origin. See toio_a3_folded_left_params.yaml for where these numbers come from
+# and for how to tell which half you are on.
+#
+# The map frame origin sits at (field_min_x, field_min_y), so with this file the
+# used half starts at 0.0 again -- x runs 0..0.210 in metres either way, and
+# nothing downstream has to know which half of the sheet it is.
+toio_ros2_node:
+  ros__parameters:
+    field_min_x: 250.0
+    field_max_x: 402.0
+    field_min_y: 142.0
+    field_max_y: 358.0
+    field_width_meter: 0.210
+    field_height_meter: 0.297

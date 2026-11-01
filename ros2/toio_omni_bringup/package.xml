@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>toio_omni_bringup</name>
+  <version>0.1.0</version>
+  <description>Runs the toio cube driver and the omnidirectional range sensor together</description>
+  <maintainer email="hijimasa@gmail.com">hijimasa</maintainer>
+  <license>Apache-2.0</license>
+
+  <exec_depend>toio_ros2</exec_depend>
+  <exec_depend>toio_omni_range</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+
+  <!-- toio_description is deliberately not a dependency: it is what the cube
+       looks like, not what it does, and it is not needed to see the scan. Turn
+       it on with use_robot_state_publisher:=true once it is in the workspace. -->
+
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

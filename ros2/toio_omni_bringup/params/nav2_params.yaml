@@ -1,0 +1,254 @@
+# nav2 for a 32 mm robot whose sensor reaches 23 cm (range_max 0.233 m).
+#
+# Almost every default in nav2 is scaled for a 50 cm robot in a building. The
+# numbers that had to change are the ones where the default is not merely
+# conservative but wrong at this size -- a progress checker that wants half a
+# metre of movement, an inflation radius larger than the whole mat, a costmap
+# cell coarser than the robot.
+#
+# Plugin names use the Jazzy `::` form. On Humble they are `/`.
+
+map_server:
+  ros__parameters:
+    yaml_filename: ""          # set by the launch file
+
+planner_server:
+  ros__parameters:
+    # The BT replans once a second; asking for 5 Hz only produced a warning
+    # about not reaching it while the controller had the CPU.
+    expected_planner_frequency: 2.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner::NavfnPlanner"
+      # 1 cm, against a default of 0.5 m: the goal has to be reachable to
+      # within something smaller than the robot.
+      tolerance: 0.01
+      use_astar: false
+      allow_unknown: false
+
+controller_server:
+  ros__parameters:
+    # toio_ros2 subscribes to a plain Twist. Jazzy added a switch for
+    # publishing TwistStamped instead, and later distros flipped its
+    # default; pinning it means the cube keeps receiving commands across
+    # that change. Harmless where the parameter does not exist -- a params
+    # file entry for an undeclared parameter is ignored.
+    enable_stamped_cmd_vel: false
+    # 10 Hz, not 20: the scan is 5 Hz and toio_ros2 caps its BLE writes at
+    # 20 Hz with de-duplication, so 20 bought nothing and the loop could not
+    # hold it anyway. It also doubles the velocity step the acceleration
+    # limits allow per cycle, which matters against the motor deadband.
+    controller_frequency: 10.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.05
+    # Plural since Iron. On Humble these are progress_checker_plugin (singular).
+    progress_checker_plugins: ["progress_checker"]
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      # The default asks for 0.5 m of progress, which this robot cannot make on
+      # a 0.297 m mat -- every navigation would abort as stuck.
+      required_movement_radius: 0.008
+      movement_time_allowance: 15.0
+
+    general_goal_checker:
+      plugin: "nav2_controller::SimpleGoalChecker"
+      stateful: True
+      xy_goal_tolerance: 0.008
+      yaw_goal_tolerance: 0.15
+
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      # 5 cm/s is what the sensor supports: an obstacle crosses the 4.1-11.1 cm
+      # visible band in 1.4 s, or seven scans, at this speed.
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.05
+      max_vel_y: 0.0
+      # Above the motor deadband, which sits at 1.69 rad/s of in-place
+      # rotation. Below that the cube does not turn at all; cmd_vel_deadband
+      # scales such commands up, but a range that is mostly deadband means the
+      # planner is asking for turns it never actually gets.
+      max_vel_theta: 3.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.05
+      min_speed_theta: 0.0
+      acc_lim_x: 0.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 20.0
+      decel_lim_x: -0.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -20.0
+      vx_samples: 20
+      # 1, not 5: this is a differential drive with max_vel_y 0, so the extra
+      # samples were four duplicates of the same trajectory each cycle -- 2000
+      # trajectories instead of 400, and the loop rate warning that came with
+      # them.
+      vy_samples: 1
+      vtheta_samples: 20
+      sim_time: 1.0
+      linear_granularity: 0.005
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.008
+      trans_stopped_velocity: 0.005
+      short_circuit_trajectory_evaluation: True
+      stateful: True
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign",
+                "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.02
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.02
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
+      # Default 0.05 m is a sixth of the mat, so the planner would call every
+      # normal manoeuvre an oscillation.
+      Oscillation.x_only_threshold: 0.02
+      Oscillation.oscillation_reset_dist: 0.01
+      Oscillation.oscillation_reset_angle: 0.2
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: odom
+      robot_base_frame: center
+      rolling_window: true
+      # Metres, but declared as integers by nav2 -- a fractional value is not a
+      # tight window, it is an InvalidParameterTypeException and a dead
+      # controller_server at startup. 1 m is the smallest legal size and is
+      # already four times the 23 cm reach; the cost is 200 x 200 cells at
+      # this resolution, which is nothing.
+      width: 1
+      height: 1
+      resolution: 0.005
+      robot_radius: 0.023          # 32 mm cube, circumscribed
+      plugins: ["obstacle_layer", "inflation_layer"]
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          marking: True
+          clearing: True
+          # inf means "nothing out to the horizon", which is information: it
+          # should clear the ray. nav2 turns inf into range_max to do that, so
+          # obstacle_max_range is kept below range_max -- otherwise those
+          # substituted points get marked and the rim fills with phantoms.
+          inf_is_valid: True
+          obstacle_max_range: 0.225
+          obstacle_min_range: 0.036
+          raytrace_max_range: 0.240
+          raytrace_min_range: 0.0
+          max_obstacle_height: 0.5
+          min_obstacle_height: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 15.0
+        inflation_radius: 0.035
+      always_send_full_costmap: True
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      update_frequency: 2.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: center
+      resolution: 0.005
+      robot_radius: 0.023
+      # A measured map has unknown cells -- behind walls, in corners the drive
+      # never reached. With false they would be treated as free and the planner
+      # would route through them. The generated mat maps have no unknown cells,
+      # so this costs them nothing.
+      track_unknown_space: true
+      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: True
+      obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        observation_sources: scan
+        scan:
+          topic: /scan
+          data_type: "LaserScan"
+          marking: True
+          clearing: True
+          inf_is_valid: True
+          obstacle_max_range: 0.225
+          obstacle_min_range: 0.036
+          raytrace_max_range: 0.240
+          raytrace_min_range: 0.0
+          max_obstacle_height: 0.5
+          min_obstacle_height: 0.0
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 15.0
+        inflation_radius: 0.035
+      always_send_full_costmap: True
+
+behavior_server:
+  ros__parameters:
+    # toio_ros2 subscribes to a plain Twist. Jazzy added a switch for
+    # publishing TwistStamped instead, and later distros flipped its
+    # default; pinning it means the cube keeps receiving commands across
+    # that change. Harmless where the parameter does not exist -- a params
+    # file entry for an undeclared parameter is ignored.
+    enable_stamped_cmd_vel: false
+    local_costmap_topic: local_costmap/costmap_raw
+    local_footprint_topic: local_costmap/published_footprint
+    global_costmap_topic: global_costmap/costmap_raw
+    global_footprint_topic: global_costmap/published_footprint
+    cycle_frequency: 10.0
+    behavior_plugins: ["spin", "backup", "drive_on_heading", "wait"]
+    spin:
+      plugin: "nav2_behaviors::Spin"
+    backup:
+      plugin: "nav2_behaviors::BackUp"
+    drive_on_heading:
+      plugin: "nav2_behaviors::DriveOnHeading"
+    wait:
+      plugin: "nav2_behaviors::Wait"
+    local_frame: odom
+    global_frame: map
+    robot_base_frame: center
+    transform_tolerance: 0.2
+    simulate_ahead_time: 2.0
+    max_rotational_vel: 1.0
+    min_rotational_vel: 0.4
+    rotational_acc_lim: 3.2
+
+bt_navigator:
+  ros__parameters:
+    global_frame: map
+    robot_base_frame: center
+    odom_topic: /odom
+    bt_loop_duration: 10
+    default_server_timeout: 20
+    wait_for_service_timeout: 1000
+    # plugin_lib_names is left out on purpose: Jazzy ships a default list, and
+    # naming them here is a way to break the build on the next release.
+
+lifecycle_manager_navigation:
+  ros__parameters:
+    autostart: true
+    bond_timeout: 0.0
+    node_names:
+      - map_server
+      - controller_server
+      - planner_server
+      - behavior_server
+      - bt_navigator

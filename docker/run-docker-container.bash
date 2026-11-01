@@ -39,14 +39,15 @@ if type nvidia-container-runtime >/dev/null 2>&1; then
   GPU_OPT="--gpus all"
 fi
 
-# Mount the dev kit's source tree too when it is checked out next to this repo,
-# so the cube driver, the bringup and the sensor driver build into one
-# workspace. The whole src/ rather than toio_ros2 alone: colcon crawls
-# recursively, so anything added there is picked up without touching this file.
-dev_kit_src="${repo_dir}/../toio_ros2_dev_kit/colcon_ws/src"
-if [ -d "${dev_kit_src}" ]; then
-  TOIO_OPT="-v `cd ${dev_kit_src} && pwd`:/home/toio/colcon_ws/src/toio_ros2_dev_kit"
-  echo "mounting the dev kit sources from ${dev_kit_src}"
+# Mount the cube driver (toio_ros2) too when the dev kit is checked out next to
+# this repo, so the cube driver, the bringup and the sensor driver build into
+# one workspace. Only toio_ros2: the bringup and mapping packages live in this
+# repository's ros2/ now, and mounting the dev kit's whole src/ would give
+# colcon two copies of them if an old checkout still has them.
+toio_ros2_src="${repo_dir}/../toio_ros2_dev_kit/colcon_ws/src/toio_ros2"
+if [ -d "${toio_ros2_src}" ]; then
+  TOIO_OPT="-v `cd ${toio_ros2_src} && pwd`:/home/toio/colcon_ws/src/toio_ros2"
+  echo "mounting toio_ros2 from ${toio_ros2_src}"
 fi
 
 # run docker
