@@ -63,26 +63,33 @@ controller_server:
 
     FollowPath:
       plugin: "dwb_core::DWBLocalPlanner"
-      # 5 cm/s is what the sensor supports: an obstacle crosses the 4.1-11.1 cm
-      # visible band in 1.4 s, or seven scans, at this speed.
+      # The build is top-heavy -- the mirror and holder sit well above a 32 mm
+      # cube -- and it tips over on abrupt starts, stops and turns. So the
+      # limits here are set by stability, not by the sensor (which, at 5 Hz
+      # and 23 cm of reach, would allow 5 cm/s or more). 3 cm/s crosses the
+      # 3.6-23 cm visible band in 6.5 s, or 32 scans.
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.05
+      max_vel_x: 0.03
       max_vel_y: 0.0
       # Above the motor deadband, which sits at 1.69 rad/s of in-place
       # rotation. Below that the cube does not turn at all; cmd_vel_deadband
       # scales such commands up, but a range that is mostly deadband means the
-      # planner is asking for turns it never actually gets.
-      max_vel_theta: 3.0
+      # planner is asking for turns it never actually gets. 2.0 keeps a little
+      # headroom above it without the spin that toppled the mirror at 3.0.
+      max_vel_theta: 2.0
       min_speed_xy: 0.0
-      max_speed_xy: 0.05
+      max_speed_xy: 0.03
       min_speed_theta: 0.0
-      acc_lim_x: 0.5
+      # Accelerations are what actually tip it. These are what DWB may ask
+      # for per cycle; the cube itself steps to the commanded speed, so the
+      # deadband minimum (motor 8) stays the hardest jolt in the system.
+      acc_lim_x: 0.15
       acc_lim_y: 0.0
-      acc_lim_theta: 20.0
-      decel_lim_x: -0.5
+      acc_lim_theta: 8.0
+      decel_lim_x: -0.15
       decel_lim_y: 0.0
-      decel_lim_theta: -20.0
+      decel_lim_theta: -8.0
       vx_samples: 20
       # 1, not 5: this is a differential drive with max_vel_y 0, so the extra
       # samples were four duplicates of the same trajectory each cycle -- 2000
@@ -229,7 +236,9 @@ behavior_server:
     simulate_ahead_time: 2.0
     max_rotational_vel: 1.0
     min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    # Top-heavy: see FollowPath. The deadband lifts anything below 1.69 rad/s
+    # up to it anyway, so the limit that matters here is the acceleration.
+    rotational_acc_lim: 1.6
 
 bt_navigator:
   ros__parameters:

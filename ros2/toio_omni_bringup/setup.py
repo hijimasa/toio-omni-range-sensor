@@ -18,6 +18,8 @@ setup(
         (os.path.join('share', package_name, 'params'), glob(os.path.join('params', '*.yaml'))),
         (os.path.join('share', package_name, 'rviz'), glob(os.path.join('rviz', '*.rviz'))),
         (os.path.join('share', package_name, 'map'), glob(os.path.join('map', '*.[py][ga]*'))),
+        (os.path.join('share', package_name, 'behavior_trees'),
+         glob(os.path.join('behavior_trees', '*.xml'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,

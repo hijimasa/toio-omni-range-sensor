@@ -35,6 +35,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -57,6 +58,7 @@ def generate_launch_description():
     frame_prefix = LaunchConfiguration('frame_prefix')
     params_file = LaunchConfiguration('params_file')
     cube_id = LaunchConfiguration('cube_id')
+    goal_max_speed = LaunchConfiguration('goal_max_speed')
     device_address = LaunchConfiguration('device_address')
     ble_adapter = LaunchConfiguration('ble_adapter')
     sensor_x = LaunchConfiguration('sensor_x')
@@ -81,6 +83,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'cube_id', default_value='',
             description='Connect only to the cube whose BLE local name contains this'),
+        DeclareLaunchArgument(
+            'goal_max_speed', default_value='15',
+            description='Motor value (8-115) the cube may use for its own '
+                        'cube_goal_pose motion. toio_ros2 defaults to 30, about '
+                        '8 cm/s, which tips the top-heavy mirror over; 15 is '
+                        'about 4 cm/s. The cube ramps this one itself'),
         DeclareLaunchArgument(
             'device_address', default_value='',
             description='BLE address of the range sensor. Setting it skips the '
@@ -137,7 +145,8 @@ def generate_launch_description():
         name='toio_ros2_node',
         namespace=namespace,
         parameters=[params_file,
-                    {'cube_id': cube_id, 'frame_prefix': frame_prefix}],
+                    {'cube_id': cube_id, 'frame_prefix': frame_prefix,
+                     'goal_max_speed': ParameterValue(goal_max_speed, value_type=int)}],
         output='screen')
     cube_remaps = [('goal_pose', 'cube_goal_pose')]
 

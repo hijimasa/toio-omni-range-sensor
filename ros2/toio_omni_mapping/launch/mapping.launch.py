@@ -50,6 +50,7 @@ def launch_setup(context, *args, **kwargs):
             'namespace': LaunchConfiguration('namespace'),
             'params_file': params_file,
             'cube_id': LaunchConfiguration('cube_id'),
+            'goal_max_speed': LaunchConfiguration('goal_max_speed'),
             'device_address': LaunchConfiguration('device_address'),
             'ble_adapter': LaunchConfiguration('ble_adapter'),
             'sensor_x': LaunchConfiguration('sensor_x'),
@@ -101,6 +102,7 @@ def generate_launch_description():
             description='Mat parameters. The grid bounds and the drive area are '
                         'derived from this'),
         DeclareLaunchArgument('cube_id', default_value=''),
+        DeclareLaunchArgument('goal_max_speed', default_value='15'),
         DeclareLaunchArgument('device_address', default_value=''),
         DeclareLaunchArgument('ble_adapter', default_value=''),
         DeclareLaunchArgument('sensor_x', default_value='0.0'),

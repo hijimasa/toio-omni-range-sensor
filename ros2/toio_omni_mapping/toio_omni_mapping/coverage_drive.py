@@ -77,6 +77,10 @@ class CoverageDrive(Node):
         # width (1.6 cm); 5 cm leaves about 3.4 cm in front of the body.
         self.declare_parameter('stop_distance', 0.05)
         self.declare_parameter('stop_sector_deg', 50.0)
+        # The nudges are already at the floor: 0.02 m/s and 1.8 rad/s are the
+        # slowest the motor deadband lets through (see toio_omni_bringup's
+        # motor_deadband.py), so the top-heavy build cannot be spared a gentler
+        # start here. What keeps it upright is how short they are.
         self.declare_parameter('backoff_speed', 0.02)
         self.declare_parameter('backoff_time', 0.8)
         self.declare_parameter('turn_rate', 1.8)

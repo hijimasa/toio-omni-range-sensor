@@ -49,11 +49,12 @@ collision_monitor:
       type: "circle"
       radius: 0.023
       action_type: "approach"
-      # How far ahead the motion is projected. At the 0.05 m/s cap this is
+      # How far ahead the motion is projected. At the 0.03 m/s cap this is
       # 6 cm of lookahead, which sits just outside the sensor's 3.6 cm blind
       # zone -- shorter and the obstacle would vanish before the monitor acted.
-      time_before_collision: 1.2
-      # 1 mm per step at the speed cap, so a 5 mm obstacle cannot be stepped
+      # Keep the product with max_vel_x at about 6 cm if the speed changes.
+      time_before_collision: 2.0
+      # 0.6 mm per step at the speed cap, so a 5 mm obstacle cannot be stepped
       # over by the projection.
       simulation_time_step: 0.02
       # Two rays, not six. A dry cell at 6 cm was only ever seen by a handful of

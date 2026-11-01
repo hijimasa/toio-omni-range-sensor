@@ -39,6 +39,11 @@ from launch_ros.actions import Node
 def generate_launch_description():
     bringup_dir = get_package_share_directory('toio_omni_bringup')
     nav2_params_file = os.path.join(bringup_dir, 'params', 'nav2_params.yaml')
+    # Our own tree, not nav2's default: the stock BackUp recovery reverses
+    # 0.30 m at 0.15 m/s, five times this robot's speed cap and the length of
+    # the mat. Its distance and speed are BT ports, so a params file cannot
+    # touch them -- see behavior_trees/navigate_to_pose_toio.xml.
+    bt_xml = os.path.join(bringup_dir, 'behavior_trees', 'navigate_to_pose_toio.xml')
     default_map = os.path.join(bringup_dir, 'map', 'toio_a3_folded_left.yaml')
     default_params_file = os.path.join(
         bringup_dir, 'params', 'toio_a3_folded_left_params.yaml')
@@ -47,6 +52,7 @@ def generate_launch_description():
     map_yaml = LaunchConfiguration('map')
     params_file = LaunchConfiguration('params_file')
     cube_id = LaunchConfiguration('cube_id')
+    goal_max_speed = LaunchConfiguration('goal_max_speed')
     device_address = LaunchConfiguration('device_address')
     ble_adapter = LaunchConfiguration('ble_adapter')
     sensor_x = LaunchConfiguration('sensor_x')
@@ -70,6 +76,7 @@ def generate_launch_description():
                         'together -- a map that disagrees with the mat puts the '
                         'walls in the wrong place'),
         DeclareLaunchArgument('cube_id', default_value=''),
+        DeclareLaunchArgument('goal_max_speed', default_value='15'),
         DeclareLaunchArgument('device_address', default_value=''),
         DeclareLaunchArgument('ble_adapter', default_value=''),
         DeclareLaunchArgument('sensor_x', default_value='0.0'),
@@ -90,6 +97,7 @@ def generate_launch_description():
         'namespace': namespace,
         'params_file': params_file,
         'cube_id': cube_id,
+        'goal_max_speed': goal_max_speed,
         'device_address': device_address,
         'ble_adapter': ble_adapter,
         'sensor_x': sensor_x,
@@ -124,7 +132,8 @@ def generate_launch_description():
              parameters=[nav2_params_file]),
         Node(package='nav2_bt_navigator', executable='bt_navigator',
              name='bt_navigator', namespace=namespace, output='screen',
-             parameters=[nav2_params_file]),
+             parameters=[nav2_params_file,
+                         {'default_nav_to_pose_bt_xml': bt_xml}]),
         Node(package='nav2_lifecycle_manager', executable='lifecycle_manager',
              name='lifecycle_manager_navigation', namespace=namespace,
              output='screen', parameters=[nav2_params_file]),
